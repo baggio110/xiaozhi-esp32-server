@@ -1,0 +1,83 @@
+"""家庭记忆 Repository 生命周期管理。"""
+
+from pathlib import Path
+from typing import Optional
+
+from .config import (
+    FamilyMemorySettings,
+    PathValue,
+    resolve_database_path,
+)
+from .sqlite_repository import SQLiteIdentityRepository
+
+
+class FamilyMemoryRuntime:
+    """按配置启停一个受管理的 SQLiteIdentityRepository。"""
+
+    def __init__(
+        self,
+        settings: FamilyMemorySettings,
+        server_root: PathValue,
+    ) -> None:
+        if not isinstance(settings, FamilyMemorySettings):
+            raise TypeError("settings 必须是 FamilyMemorySettings")
+        self._settings = settings
+        self._server_root = server_root
+        self._started = False
+        self._repository: Optional[SQLiteIdentityRepository] = None
+        self._database_path: Optional[Path] = None
+
+    @property
+    def enabled(self) -> bool:
+        return self._settings.enabled
+
+    @property
+    def is_started(self) -> bool:
+        return self._started
+
+    @property
+    def is_active(self) -> bool:
+        return self._started and self._repository is not None
+
+    @property
+    def family_id(self) -> Optional[str]:
+        if not self.is_active:
+            return None
+        return self._settings.family_id
+
+    @property
+    def database_path(self) -> Optional[Path]:
+        return self._database_path
+
+    @property
+    def repository(self) -> Optional[SQLiteIdentityRepository]:
+        return self._repository
+
+    def start(self) -> Optional[SQLiteIdentityRepository]:
+        """幂等启动；重复调用返回同一个 Repository。"""
+
+        if self._started:
+            return self._repository
+
+        if not self._settings.enabled:
+            self._started = True
+            return None
+
+        database_path = resolve_database_path(
+            self._server_root,
+            self._settings.database_path,
+        )
+        database_path.parent.mkdir(parents=True, exist_ok=True)
+        repository = SQLiteIdentityRepository(database_path)
+
+        self._database_path = database_path
+        self._repository = repository
+        self._started = True
+        return repository
+
+    def close(self) -> None:
+        """停止 Runtime；短连接 Repository 无需伪造 close 操作。"""
+
+        self._repository = None
+        self._database_path = None
+        self._started = False

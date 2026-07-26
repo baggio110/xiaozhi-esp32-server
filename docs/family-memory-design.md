@@ -112,6 +112,24 @@ family_id + RecognitionResult
 
 它不访问设备、连接对象、对话或 PowerMem，也不保存最近一次识别人员。
 
+## B2a 配置与 Runtime
+
+家庭记忆功能默认关闭。`FamilyMemorySettings` 严格只包含：
+
+- `enabled: bool = false`
+- `family_id: Optional[str] = None`
+- `database_path: str = "data/family_identity.db"`
+
+启用时必须显式配置非空 `family_id`；该值不会从设备、用户或智能体推断。配置模型只从调用方提供的 mapping 构造，不读取环境变量、真实配置或密钥。
+
+`database_path` 必须是相对于 `xiaozhi-server` 根目录的路径。路径解析函数要求调用方显式传入绝对 `server_root`，拒绝绝对数据库路径和逃出项目根目录的目录穿越。路径解析本身不创建文件或目录。
+
+`FamilyMemoryRuntime` 只在 `enabled=true` 且调用 `start()` 后解析路径、创建父目录并初始化 `SQLiteIdentityRepository`。重复 `start()` 幂等返回同一个 Repository。
+
+`enabled=false` 时 Runtime 不创建 Repository、数据库或 `data` 目录，不生成 `person_id` 或 `memory_user_id`，也不改变官方 `device_id` 记忆行为。`close()` 只清除 Runtime 引用，不删除数据库或人员绑定。
+
+B2a 尚未接入现有 `config.yaml`、配置加载器、声纹、连接、对话或 PowerMem 业务链路。
+
 ## 第一版不包含
 
 - 智控台家庭成员页面

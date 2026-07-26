@@ -5,6 +5,14 @@ class FamilyIdentityError(Exception):
     """家庭身份模块基础异常。"""
 
 
+class FamilyMemoryConfigurationError(FamilyIdentityError, ValueError):
+    """家庭记忆配置无效。"""
+
+
+class InvalidDatabasePathError(FamilyMemoryConfigurationError):
+    """家庭身份数据库路径无效或逃出项目根目录。"""
+
+
 class InvalidIdentityIdError(FamilyIdentityError, ValueError):
     """身份 ID 为空或格式无效。"""
 
