@@ -110,16 +110,24 @@ class FakeIdentityRepository:
         self,
         bindings: Optional[Dict[str, PersonIdentity]] = None,
     ) -> None:
-        self._bindings = dict(bindings or {})
+        self._bindings = {
+            (person.family_id, voiceprint_id): person
+            for voiceprint_id, person in (bindings or {}).items()
+        }
+        self.find_calls: List[Dict[str, str]] = []
 
     def bind(self, voiceprint_id: str, person: PersonIdentity) -> None:
-        self._bindings[voiceprint_id] = person
+        self._bindings[(person.family_id, voiceprint_id)] = person
 
     def find_by_voiceprint_id(
         self,
+        family_id: str,
         voiceprint_id: str,
     ) -> Optional[PersonIdentity]:
-        return self._bindings.get(voiceprint_id)
+        self.find_calls.append(
+            {"family_id": family_id, "voiceprint_id": voiceprint_id}
+        )
+        return self._bindings.get((family_id, voiceprint_id))
 
 
 @dataclass(frozen=True)

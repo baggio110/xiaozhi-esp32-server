@@ -98,7 +98,10 @@ class IdentityPolicy:
             )
 
         try:
-            person = self._repository.find_by_voiceprint_id(voiceprint_id)
+            person = self._repository.find_by_voiceprint_id(
+                family_id,
+                voiceprint_id,
+            )
         except Exception:
             return IdentityDecision.denied(
                 family_id,

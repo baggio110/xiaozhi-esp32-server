@@ -21,9 +21,10 @@ class IdentityRepository(Protocol):
 
     def find_by_voiceprint_id(
         self,
+        family_id: str,
         voiceprint_id: str,
     ) -> Optional[PersonIdentity]:
-        """查询声纹凭据绑定的人员身份。"""
+        """在指定家庭边界内查询声纹凭据绑定的人员身份。"""
 
 
 class IdentityResolver(Protocol):
