@@ -8,6 +8,12 @@ from .config import (
     PathValue,
     resolve_database_path,
 )
+from .models import (
+    IdentityDecision,
+    IdentityStatus,
+    RecognitionResult,
+)
+from .service import IdentityService
 from .sqlite_repository import SQLiteIdentityRepository
 
 
@@ -25,6 +31,7 @@ class FamilyMemoryRuntime:
         self._server_root = server_root
         self._started = False
         self._repository: Optional[SQLiteIdentityRepository] = None
+        self._identity_service: Optional[IdentityService] = None
         self._database_path: Optional[Path] = None
 
     @property
@@ -37,7 +44,11 @@ class FamilyMemoryRuntime:
 
     @property
     def is_active(self) -> bool:
-        return self._started and self._repository is not None
+        return (
+            self._started
+            and self._repository is not None
+            and self._identity_service is not None
+        )
 
     @property
     def family_id(self) -> Optional[str]:
@@ -69,15 +80,38 @@ class FamilyMemoryRuntime:
         )
         database_path.parent.mkdir(parents=True, exist_ok=True)
         repository = SQLiteIdentityRepository(database_path)
+        identity_service = IdentityService(repository)
 
         self._database_path = database_path
         self._repository = repository
+        self._identity_service = identity_service
         self._started = True
         return repository
+
+    def resolve_identity(
+        self,
+        recognition: Optional[RecognitionResult],
+    ) -> IdentityDecision:
+        """使用当前 Runtime 的家庭边界解析一次声纹结果。"""
+
+        family_id = self.family_id
+        identity_service = self._identity_service
+        if family_id is None or identity_service is None:
+            raise RuntimeError("家庭身份 Runtime 尚未启用")
+
+        try:
+            return identity_service.resolve(family_id, recognition)
+        except Exception:
+            return IdentityDecision.denied(
+                family_id,
+                IdentityStatus.INVALID_RESULT,
+                failure_reason="identity_resolution_error",
+            )
 
     def close(self) -> None:
         """停止 Runtime；短连接 Repository 无需伪造 close 操作。"""
 
         self._repository = None
+        self._identity_service = None
         self._database_path = None
         self._started = False

@@ -8,7 +8,13 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from core.family_identity import IdentityStatus
+from core.family_identity import (
+    IdentityService,
+    IdentityStatus,
+    PersonIdentity,
+)
+
+from .fakes import FakeIdentityRepository
 
 
 VOICEPRINT_PROVIDER_PATH = (
@@ -178,14 +184,86 @@ class VoiceprintRecognitionResultTest(unittest.IsolatedAsyncioTestCase):
     async def test_score_below_threshold_is_low_confidence(self):
         result = await self.identify(
             FakeResponse(
-                payload={"speaker_id": "speaker_a", "score": 0.39}
+                payload={"speaker_id": "speaker_a", "score": 0.35}
             )
         )
 
         self.assertEqual(IdentityStatus.LOW_CONFIDENCE, result.status)
         self.assertEqual("speaker_a", result.voiceprint_id)
-        self.assertEqual(0.39, result.confidence)
+        self.assertEqual(0.35, result.confidence)
         self.assertIsNone(result.speaker_name)
+
+        repository = FakeIdentityRepository(
+            {
+                "speaker_a": PersonIdentity(
+                    "family_001",
+                    "person_father",
+                    "爸爸",
+                )
+            }
+        )
+        decision = IdentityService(repository).resolve(
+            "family_001",
+            result,
+        )
+        self.assertEqual(
+            IdentityStatus.LOW_CONFIDENCE,
+            decision.identity_status,
+        )
+        self.assertEqual([], repository.find_calls)
+
+    async def test_provider_point_3_threshold_is_authoritative(self):
+        self.provider.similarity_threshold = 0.3
+        result = await self.identify(
+            FakeResponse(
+                payload={"speaker_id": "speaker_a", "score": 0.35}
+            )
+        )
+        repository = FakeIdentityRepository(
+            {
+                "speaker_a": PersonIdentity(
+                    "family_001",
+                    "person_father",
+                    "爸爸",
+                )
+            }
+        )
+
+        decision = IdentityService(repository).resolve(
+            "family_001",
+            result,
+        )
+
+        self.assertEqual(IdentityStatus.RECOGNIZED, result.status)
+        self.assertEqual(
+            IdentityStatus.RECOGNIZED,
+            decision.identity_status,
+        )
+        self.assertEqual(
+            "family_001:person_father",
+            decision.memory_user_id,
+        )
+
+    async def test_two_provider_thresholds_classify_same_score_differently(self):
+        self.provider.similarity_threshold = 0.3
+        recognized = await self.identify(
+            FakeResponse(
+                payload={"speaker_id": "speaker_a", "score": 0.35}
+            )
+        )
+
+        self.provider.similarity_threshold = 0.5
+        low_confidence = await self.identify(
+            FakeResponse(
+                payload={"speaker_id": "speaker_a", "score": 0.35}
+            )
+        )
+
+        self.assertEqual(IdentityStatus.RECOGNIZED, recognized.status)
+        self.assertEqual(
+            IdentityStatus.LOW_CONFIDENCE,
+            low_confidence.status,
+        )
 
     async def test_empty_or_missing_speaker_id_is_unknown(self):
         for payload in (

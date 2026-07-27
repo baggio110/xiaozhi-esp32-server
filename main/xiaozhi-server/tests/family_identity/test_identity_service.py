@@ -33,10 +33,7 @@ class IdentityServiceTest(unittest.TestCase):
             "person_father",
             "voiceprint_father",
         )
-        self.service = IdentityService(
-            self.repository,
-            min_confidence=0.8,
-        )
+        self.service = IdentityService(self.repository)
 
     def tearDown(self):
         self.temporary_directory.cleanup()
@@ -106,9 +103,9 @@ class IdentityServiceTest(unittest.TestCase):
             (
                 RecognitionResult(
                     voiceprint_id="voiceprint_father",
-                    speaker_name="爸爸",
-                    confidence=0.79,
-                    status=IdentityStatus.RECOGNIZED,
+                    speaker_name=None,
+                    confidence=0.35,
+                    status=IdentityStatus.LOW_CONFIDENCE,
                 ),
                 IdentityStatus.LOW_CONFIDENCE,
             ),
@@ -137,7 +134,7 @@ class IdentityServiceTest(unittest.TestCase):
         repository = FakeIdentityRepository(
             {"voiceprint_father": self.father}
         )
-        service = IdentityService(repository, min_confidence=0.8)
+        service = IdentityService(repository)
         result = RecognitionResult(
             voiceprint_id=None,
             speaker_name=None,
@@ -153,6 +150,25 @@ class IdentityServiceTest(unittest.TestCase):
             IdentityStatus.SERVICE_UNAVAILABLE,
         )
         self.assertEqual([], repository.find_calls)
+
+    def test_provider_recognized_status_with_score_point_35_is_preserved(self):
+        result = RecognitionResult(
+            voiceprint_id="voiceprint_father",
+            speaker_name="爸爸",
+            confidence=0.35,
+            status=IdentityStatus.RECOGNIZED,
+        )
+
+        decision = self.service.resolve("family_001", result)
+
+        self.assertEqual(
+            IdentityStatus.RECOGNIZED,
+            decision.identity_status,
+        )
+        self.assertEqual(
+            "family_001:person_father",
+            decision.memory_user_id,
+        )
 
     @staticmethod
     def recognized_result() -> RecognitionResult:

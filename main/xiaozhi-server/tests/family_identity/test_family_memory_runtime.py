@@ -9,7 +9,9 @@ from core.family_identity import (
     SCHEMA_VERSION,
     FamilyMemoryRuntime,
     FamilyMemorySettings,
+    IdentityStatus,
     PersonIdentity,
+    RecognitionResult,
     SQLiteIdentityRepository,
 )
 
@@ -82,6 +84,7 @@ class FamilyMemoryRuntimeTest(unittest.TestCase):
         self.assertTrue(runtime.enabled)
         self.assertTrue(runtime.is_started)
         self.assertTrue(runtime.is_active)
+        self.assertFalse(hasattr(runtime, "_min_confidence"))
         self.assertEqual(
             self.server_root / "data" / "family_identity.db",
             runtime.database_path,
@@ -174,6 +177,98 @@ class FamilyMemoryRuntimeTest(unittest.TestCase):
             runtime.database_path,
         )
         self.assertTrue(runtime.database_path.exists())
+
+    def test_enabled_runtime_resolves_with_one_identity_service_call(self):
+        runtime = self.enabled_runtime()
+        repository = runtime.start()
+        father = PersonIdentity(
+            "family_001",
+            "person_father",
+            "爸爸",
+        )
+        repository.save_person(father)
+        repository.bind_voiceprint(
+            "family_001",
+            "person_father",
+            "voiceprint_father",
+        )
+        original_service = runtime._identity_service
+        self.assertIs(
+            runtime.repository,
+            original_service._policy._repository,
+        )
+
+        class CountingIdentityService:
+            def __init__(self):
+                self.calls = 0
+
+            def resolve(self, family_id, recognition):
+                self.calls += 1
+                return original_service.resolve(family_id, recognition)
+
+        counting_service = CountingIdentityService()
+        runtime._identity_service = counting_service
+
+        decision = runtime.resolve_identity(
+            RecognitionResult(
+                voiceprint_id="voiceprint_father",
+                speaker_name="爸爸",
+                confidence=0.91,
+                status=IdentityStatus.RECOGNIZED,
+            )
+        )
+
+        self.assertEqual(1, counting_service.calls)
+        self.assertEqual(IdentityStatus.RECOGNIZED, decision.identity_status)
+        self.assertEqual(
+            "family_001:person_father",
+            decision.memory_user_id,
+        )
+
+    def test_identity_service_exception_is_fail_closed(self):
+        runtime = self.enabled_runtime()
+        runtime.start()
+
+        class FailingIdentityService:
+            def resolve(self, family_id, recognition):
+                raise RuntimeError("test-only")
+
+        runtime._identity_service = FailingIdentityService()
+
+        decision = runtime.resolve_identity(
+            RecognitionResult(
+                voiceprint_id="voiceprint_father",
+                speaker_name="爸爸",
+                confidence=0.91,
+                status=IdentityStatus.RECOGNIZED,
+            )
+        )
+
+        self.assertEqual(
+            IdentityStatus.INVALID_RESULT,
+            decision.identity_status,
+        )
+        self.assertFalse(decision.allow_memory_read)
+        self.assertFalse(decision.allow_memory_write)
+        self.assertIsNone(decision.memory_user_id)
+        self.assertEqual(
+            "identity_resolution_error",
+            decision.failure_reason,
+        )
+
+    def test_disabled_runtime_does_not_resolve_identity(self):
+        runtime = FamilyMemoryRuntime(
+            FamilyMemorySettings(),
+            self.server_root,
+        )
+        runtime.start()
+
+        with self.assertRaises(RuntimeError):
+            runtime.resolve_identity(None)
+
+        self.assertIsNone(runtime._identity_service)
+        self.assertIsNone(runtime.repository)
+        self.assertFalse((self.server_root / "data").exists())
 
     def enabled_runtime(self) -> FamilyMemoryRuntime:
         return FamilyMemoryRuntime(

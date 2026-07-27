@@ -43,10 +43,17 @@ def load_isolated_asr_base():
     """隔离加载 ASR 基类，避免导入或启动外部业务组件。"""
 
     chat_inputs = []
+    chat_contexts = []
     reports = []
 
-    async def start_to_chat(conn, text):
+    async def start_to_chat(
+        conn,
+        text,
+        *,
+        turn_identity_context=None,
+    ):
         chat_inputs.append(text)
+        chat_contexts.append(turn_identity_context)
 
     def enqueue_report(conn, text, audio):
         reports.append((text, audio))
@@ -71,7 +78,7 @@ def load_isolated_asr_base():
     module = importlib.util.module_from_spec(spec)
     with patch.dict(sys.modules, stubs):
         spec.loader.exec_module(module)
-    return module, chat_inputs, reports
+    return module, chat_inputs, chat_contexts, reports
 
 
 class FakeVoiceprintProvider:
@@ -86,7 +93,12 @@ class FakeVoiceprintProvider:
 
 class AsrVoiceprintCompatibilityTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
-        self.module, self.chat_inputs, self.reports = (
+        (
+            self.module,
+            self.chat_inputs,
+            self.chat_contexts,
+            self.reports,
+        ) = (
             load_isolated_asr_base()
         )
 
@@ -116,6 +128,7 @@ class AsrVoiceprintCompatibilityTest(unittest.IsolatedAsyncioTestCase):
             voiceprint_provider=voiceprint_provider,
             session_id="session_001",
             device_id="device_must_not_become_speaker",
+            family_memory_runtime=None,
         )
 
     async def test_recognized_name_keeps_original_chat_json_shape(self):

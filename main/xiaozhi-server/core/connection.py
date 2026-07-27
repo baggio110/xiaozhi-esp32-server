@@ -20,7 +20,7 @@ from core.utils.util import (
     check_asr_update,
     filter_sensitive_info,
 )
-from typing import Dict, Any
+from typing import Dict, Any, Optional, TYPE_CHECKING
 from collections import deque
 from core.utils.modules_initialize import (
     initialize_modules,
@@ -45,6 +45,9 @@ from core.utils.prompt_manager import PromptManager
 from core.utils.voiceprint_provider import VoiceprintProvider
 from core.utils.util import get_system_error_response
 from core.utils import textUtils
+
+if TYPE_CHECKING:
+    from core.family_identity import FamilyMemoryRuntime, TurnIdentityContext
 
 
 TAG = __name__
@@ -86,12 +89,15 @@ class ConnectionHandler:
             _memory,
             _intent,
             server=None,
+            *,
+            family_memory_runtime: Optional["FamilyMemoryRuntime"] = None,
     ):
         self.common_config = config
         self.config = copy.deepcopy(config)
         self.session_id = str(uuid.uuid4())
         self.logger = setup_logging()
         self.server = server  # 保存server实例的引用
+        self.family_memory_runtime = family_memory_runtime
 
         self.need_bind = False  # 是否需要绑定设备
         self.bind_completed_event = asyncio.Event()
@@ -1031,7 +1037,13 @@ class ConnectionHandler:
         # 更新系统prompt至上下文
         self.dialogue.update_system_message(self.prompt)
 
-    def chat(self, query, depth=0):
+    def chat(
+        self,
+        query,
+        depth=0,
+        *,
+        turn_identity_context: Optional["TurnIdentityContext"] = None,
+    ):
         # 保存当前任务的sentence_id到局部变量，避免被新任务覆盖
         current_sentence_id = None
 
@@ -1479,7 +1491,11 @@ class ConnectionHandler:
                         )
                     )
 
-            self.chat(None, depth=depth + 1)
+            self.chat(
+                None,
+                depth=depth + 1,
+                turn_identity_context=turn_identity_context,
+            )
 
     def _report_worker(self):
         """聊天记录上报工作线程"""

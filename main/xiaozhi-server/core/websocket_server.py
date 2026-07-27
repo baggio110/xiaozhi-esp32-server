@@ -1,8 +1,12 @@
 import asyncio
 import logging
+from typing import Optional, TYPE_CHECKING
 
 import websockets
 from config.logger import setup_logging
+
+if TYPE_CHECKING:
+    from core.family_identity import FamilyMemoryRuntime
 
 
 class SuppressInvalidHandshakeFilter(logging.Filter):
@@ -40,8 +44,14 @@ TAG = __name__
 
 
 class WebSocketServer:
-    def __init__(self, config: dict):
+    def __init__(
+        self,
+        config: dict,
+        *,
+        family_memory_runtime: Optional["FamilyMemoryRuntime"] = None,
+    ):
         self.config = config
+        self.family_memory_runtime = family_memory_runtime
         self.logger = setup_logging(config)
         self.config_lock = asyncio.Lock()
         modules = initialize_modules(
@@ -122,6 +132,7 @@ class WebSocketServer:
             self._memory,
             self._intent,
             self,  # 传入server实例
+            family_memory_runtime=self.family_memory_runtime,
         )
         try:
             await handler.handle_connection(websocket)

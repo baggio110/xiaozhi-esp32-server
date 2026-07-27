@@ -100,7 +100,10 @@ async def main():
     await gc_manager.start()
 
     # 启动 WebSocket 服务器
-    ws_server = WebSocketServer(config)
+    ws_server = WebSocketServer(
+        config,
+        family_memory_runtime=family_memory_runtime,
+    )
     ws_task = asyncio.create_task(ws_server.start())
     # 启动 Simple http 服务器
     ota_server = SimpleHttpServer(config)

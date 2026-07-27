@@ -22,7 +22,7 @@ class IdentityPolicyTest(unittest.IsolatedAsyncioTestCase):
         self.repository = FakeIdentityRepository(
             {"voiceprint_father": self.father}
         )
-        self.policy = IdentityPolicy(self.repository, min_confidence=0.8)
+        self.policy = IdentityPolicy(self.repository)
 
     async def test_fake_voiceprint_provider_supports_all_required_modes(self):
         providers = (
@@ -82,14 +82,47 @@ class IdentityPolicyTest(unittest.IsolatedAsyncioTestCase):
     def test_low_confidence_is_denied(self):
         result = RecognitionResult(
             voiceprint_id="voiceprint_father",
-            speaker_name="爸爸",
-            confidence=0.79,
-            status=IdentityStatus.RECOGNIZED,
+            speaker_name=None,
+            confidence=0.35,
+            status=IdentityStatus.LOW_CONFIDENCE,
         )
 
         self.assert_denied(
             self.policy.decide("family_001", result),
             IdentityStatus.LOW_CONFIDENCE,
+        )
+        self.assertEqual([], self.repository.find_calls)
+
+    def test_recognized_status_is_not_reclassified_by_confidence(self):
+        result = RecognitionResult(
+            voiceprint_id="voiceprint_father",
+            speaker_name="爸爸",
+            confidence=0.35,
+            status=IdentityStatus.RECOGNIZED,
+        )
+
+        decision = self.policy.decide("family_001", result)
+
+        self.assertEqual(
+            IdentityStatus.RECOGNIZED,
+            decision.identity_status,
+        )
+        self.assertEqual(
+            "family_001:person_father",
+            decision.memory_user_id,
+        )
+
+    def test_recognized_status_with_invalid_confidence_is_denied(self):
+        result = RecognitionResult(
+            voiceprint_id="voiceprint_father",
+            speaker_name="爸爸",
+            confidence=None,
+            status=IdentityStatus.RECOGNIZED,
+        )
+
+        self.assert_denied(
+            self.policy.decide("family_001", result),
+            IdentityStatus.INVALID_RESULT,
         )
 
     def test_service_unavailable_is_denied(self):

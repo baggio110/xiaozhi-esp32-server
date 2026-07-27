@@ -151,7 +151,19 @@ Runtime 在现有服务关闭 `finally` 中调用 `close()`。关闭状态不创
 - 超时、HTTP 错误或服务异常：`SERVICE_UNAVAILABLE`；
 - 非 JSON、字段类型错误或无效结构：`INVALID_RESULT`。
 
+可信度只由 `VoiceprintProvider` 使用当前连接实际取得的 `voiceprint.similarity_threshold` 分类一次。`RecognitionResult.status` 是后续身份解析的权威状态；`IdentityPolicy` 保留失败状态，并仅对 `RECOGNIZED` 的必要字段、人员绑定和启用状态进行校验，不使用另一套阈值重新分类。
+
 `ASRProviderBase.handle_voice_stop()` 只从 `RECOGNIZED` 结果中提取非空 `speaker_name`，继续生成官方原有的 `{"speaker": "...", "content": "..."}` 输入。其他状态以及未启用声纹时仍使用原有非个人化聊天输入。本阶段不解析 `person_id`、不生成 `memory_user_id`，也不改变 PowerMem 的官方 `device_id` 行为。
+
+## B3b 单轮身份上下文传递
+
+`app.main()` 创建的唯一 `FamilyMemoryRuntime` 通过 `WebSocketServer` 构造参数显式传给每个 `ConnectionHandler`。启用时 Runtime 复用已有 `SQLiteIdentityRepository` 创建一个 `IdentityService`；关闭时不创建服务、不访问 Repository。
+
+ASR 完成一轮识别后，将本轮 `RecognitionResult` 交给 Runtime 解析为 `IdentityDecision`，再使用连接既有的 `session_id`、`device_id` 和标准库生成的唯一 `turn_id` 创建不可变 `TurnIdentityContext`。该对象作为局部变量通过 `startToChat()` 的线程池任务直接传给 `ConnectionHandler.chat()`，不从连接上的当前说话人或历史身份反推。
+
+所有非成功状态及解析异常都生成失败关闭决策，不回退到设备、显示名称、声纹凭据或上一次人员。家庭功能关闭时上下文为 `None`，原有聊天调用保持兼容。
+
+本阶段 `chat()` 只接收并原样传递该参数，不使用它查询、修改或保存记忆；Dialogue、PowerMem、提示词和工具行为均保持不变。
 
 ## 第一版不包含
 

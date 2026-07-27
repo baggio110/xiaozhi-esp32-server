@@ -13,7 +13,11 @@ import threading
 
 from abc import ABC, abstractmethod
 from config.logger import setup_logging
-from core.family_identity.models import IdentityStatus, RecognitionResult
+from core.family_identity.models import (
+    IdentityStatus,
+    RecognitionResult,
+    TurnIdentityContext,
+)
 from core.providers.asr.dto.dto import InterfaceType
 from core.handle.receiveAudioHandle import startToChat
 from core.handle.reportHandle import enqueue_asr_report
@@ -113,6 +117,16 @@ class ASRProviderBase(ABC):
                 asr_result = await asr_task
                 voiceprint_result = None
 
+            recognition_result = (
+                voiceprint_result
+                if isinstance(voiceprint_result, RecognitionResult)
+                else None
+            )
+            turn_identity_context = self._create_turn_identity_context(
+                conn,
+                recognition_result,
+            )
+
             # 记录识别结果 - 检查是否为异常
             if isinstance(asr_result, Exception):
                 logger.bind(tag=TAG).error(f"ASR识别失败: {asr_result}")
@@ -168,7 +182,11 @@ class ASRProviderBase(ABC):
                 audio_snapshot = asr_audio_task.copy()
                 enqueue_asr_report(conn, enhanced_text, audio_snapshot)
                 # 使用自定义模块进行上报
-                await startToChat(conn, enhanced_text)
+                await startToChat(
+                    conn,
+                    enhanced_text,
+                    turn_identity_context=turn_identity_context,
+                )
         except Exception as e:
             logger.bind(tag=TAG).error(f"处理语音停止失败: {e}")
             import traceback
@@ -194,6 +212,27 @@ class ASRProviderBase(ABC):
         ):
             return result.speaker_name
         return None
+
+    def _create_turn_identity_context(
+        self,
+        conn: "ConnectionHandler",
+        recognition_result: Optional[RecognitionResult],
+    ) -> Optional[TurnIdentityContext]:
+        """为当前语音轮次创建不可变身份快照。"""
+        runtime = getattr(conn, "family_memory_runtime", None)
+        if runtime is None or not runtime.is_active:
+            return None
+
+        try:
+            decision = runtime.resolve_identity(recognition_result)
+            return TurnIdentityContext(
+                session_id=conn.session_id,
+                turn_id=str(uuid.uuid4()),
+                device_id=conn.device_id,
+                identity_decision=decision,
+            )
+        except Exception:
+            return None
 
     def _pcm_to_wav(self, pcm_data: bytes) -> bytes:
         """将PCM数据转换为WAV格式"""

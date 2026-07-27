@@ -240,16 +240,46 @@ class FamilyMemoryAppConfigurationTest(unittest.TestCase):
 
         self.assertIs(first_repository, second_repository)
 
+    def test_runtime_start_does_not_read_voiceprint_threshold(self):
+        class UnreadableVoiceprintConfig:
+            def get(self, *args, **kwargs):
+                raise AssertionError("Runtime 不得读取声纹阈值")
+
+        runtime = self.app.start_family_memory_runtime(
+            {
+                "family_memory": {
+                    "enabled": True,
+                    "family_id": "family_001",
+                    "database_path": "data/family_identity.db",
+                },
+                "voiceprint": UnreadableVoiceprintConfig(),
+            },
+            self.server_root,
+        )
+
+        self.assertTrue(runtime.is_active)
+        self.assertFalse(hasattr(runtime, "_min_confidence"))
+
 
 class FamilyMemoryAppLifecycleTest(unittest.TestCase):
-    def test_disabled_runtime_is_closed_without_changing_server_init(self):
+    def test_runtime_is_passed_only_to_websocket_server_and_closed(self):
         app, _ = load_isolated_app()
         events = []
         server_arguments = []
 
         class FakeRuntime:
-            def __init__(self, settings, server_root):
-                events.append(("runtime_init", settings, server_root))
+            def __init__(
+                self,
+                settings,
+                server_root,
+            ):
+                events.append(
+                    (
+                        "runtime_init",
+                        settings,
+                        server_root,
+                    )
+                )
 
             def start(self):
                 events.append(("runtime_start",))
@@ -259,8 +289,8 @@ class FamilyMemoryAppLifecycleTest(unittest.TestCase):
                 events.append(("runtime_close",))
 
         class FakeServer:
-            def __init__(self, *args):
-                server_arguments.append(args)
+            def __init__(self, *args, **kwargs):
+                server_arguments.append((args, kwargs))
 
             async def start(self):
                 await asyncio.Future()
@@ -307,6 +337,14 @@ class FamilyMemoryAppLifecycleTest(unittest.TestCase):
         self.assertEqual(1, event_names.count("gc_start"))
         self.assertEqual(1, event_names.count("gc_stop"))
         self.assertEqual(2, len(server_arguments))
-        self.assertTrue(
-            all(len(arguments) == 1 for arguments in server_arguments)
+        websocket_arguments = server_arguments[0]
+        http_arguments = server_arguments[1]
+        self.assertEqual(1, len(websocket_arguments[0]))
+        self.assertIsInstance(
+            websocket_arguments[1]["family_memory_runtime"],
+            FakeRuntime,
         )
+        self.assertEqual((1, 0), (
+            len(http_arguments[0]),
+            len(http_arguments[1]),
+        ))

@@ -13,10 +13,8 @@ class IdentityService:
     def __init__(
         self,
         repository: IdentityRepository,
-        *,
-        min_confidence: float,
     ) -> None:
-        self._policy = IdentityPolicy(repository, min_confidence)
+        self._policy = IdentityPolicy(repository)
 
     def resolve(
         self,

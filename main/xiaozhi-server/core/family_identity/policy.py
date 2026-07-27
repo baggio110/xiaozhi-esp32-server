@@ -18,17 +18,8 @@ class IdentityPolicy:
     def __init__(
         self,
         repository: IdentityRepository,
-        min_confidence: float,
     ) -> None:
-        if (
-            isinstance(min_confidence, bool)
-            or not isinstance(min_confidence, (int, float))
-            or not isfinite(min_confidence)
-            or not 0 <= min_confidence <= 1
-        ):
-            raise ValueError("min_confidence 必须是 0 到 1 之间的有限数值")
         self._repository = repository
-        self._min_confidence = float(min_confidence)
 
     def decide(
         self,
@@ -86,15 +77,6 @@ class IdentityPolicy:
                 voiceprint_id=voiceprint_id,
                 display_name=recognition.speaker_name,
                 failure_reason="confidence_invalid",
-            )
-
-        if confidence < self._min_confidence:
-            return IdentityDecision.denied(
-                family_id,
-                IdentityStatus.LOW_CONFIDENCE,
-                voiceprint_id=voiceprint_id,
-                display_name=recognition.speaker_name,
-                failure_reason="confidence_below_threshold",
             )
 
         try:
