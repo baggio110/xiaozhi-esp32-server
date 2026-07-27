@@ -2,9 +2,16 @@ import sys
 import uuid
 import signal
 import asyncio
+from pathlib import Path
+
 from aioconsole import ainput
 from config.settings import load_config
 from config.logger import setup_logging
+from core.family_identity import (
+    FamilyMemoryConfigurationError,
+    FamilyMemoryRuntime,
+    FamilyMemorySettings,
+)
 from core.utils.util import get_local_ip, validate_mcp_endpoint
 from core.http_server import SimpleHttpServer
 from core.websocket_server import WebSocketServer
@@ -13,6 +20,29 @@ from core.utils.gc_manager import get_gc_manager
 
 TAG = __name__
 logger = setup_logging()
+SERVER_ROOT = Path(__file__).resolve().parent
+
+
+def start_family_memory_runtime(
+    config: dict,
+    server_root: Path = SERVER_ROOT,
+) -> FamilyMemoryRuntime:
+    """从现有配置启动家庭记忆 Runtime。"""
+
+    family_memory_config = config.get("family_memory", {})
+    try:
+        settings = FamilyMemorySettings.from_mapping(
+            family_memory_config
+        )
+        runtime = FamilyMemoryRuntime(settings, server_root)
+        runtime.start()
+        return runtime
+    except FamilyMemoryConfigurationError as exc:
+        logger.bind(tag=TAG).error(
+            "家庭记忆配置无效，服务启动终止：{}",
+            str(exc),
+        )
+        raise
 
 
 async def wait_for_exit() -> None:
@@ -46,6 +76,7 @@ async def monitor_stdin():
 async def main():
     check_ffmpeg_installed()
     config = await load_config()
+    family_memory_runtime = start_family_memory_runtime(config)
 
     # auth_key优先级：配置文件server.auth_key > manager-api.secret > 自动生成
     # auth_key用于jwt认证，比如视觉分析接口的jwt认证、ota接口的token生成与websocket认证
@@ -127,6 +158,8 @@ async def main():
     except asyncio.CancelledError:
         print("任务被取消，清理资源中...")
     finally:
+        family_memory_runtime.close()
+
         # 停止全局GC管理器
         await gc_manager.stop()
 

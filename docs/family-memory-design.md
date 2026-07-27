@@ -130,6 +130,14 @@ family_id + RecognitionResult
 
 B2a 尚未接入现有 `config.yaml`、配置加载器、声纹、连接、对话或 PowerMem 业务链路。
 
+## B2b 配置与服务生命周期接入
+
+服务端配置模板增加 `family_memory` 节点，严格包含 `enabled`、`family_id` 和 `database_path` 三个字段。`app.main()` 通过现有 `load_config()` 获得配置字典；节点缺失时使用空 mapping，因此等同于家庭记忆关闭。
+
+`start_family_memory_runtime()` 使用 `FamilyMemorySettings.from_mapping()` 解析节点，并以 `Path(__file__).resolve().parent` 作为稳定的 `xiaozhi-server` 根目录启动 `FamilyMemoryRuntime`。非法配置会记录不包含配置值的错误并中止启动，不会静默降级。
+
+Runtime 在现有服务关闭 `finally` 中调用 `close()`。关闭状态不创建数据库，也不改变 WebSocket、HTTP、聊天或记忆模块的构造参数；启用状态只初始化身份 Repository，尚未向连接、声纹、对话或 PowerMem 传递 Repository。
+
 ## 第一版不包含
 
 - 智控台家庭成员页面
