@@ -93,8 +93,16 @@ async def startToChat(
     if conn.client_is_speaking and conn.client_listen_mode != "manual":
         await handleAbortMessage(conn)
 
+    active_dialogue = conn.get_dialogue_for_turn(
+        turn_identity_context
+    )
+
     # 首先进行意图分析，使用实际文本内容
-    intent_handled = await handle_user_intent(conn, actual_text)
+    intent_handled = await handle_user_intent(
+        conn,
+        actual_text,
+        dialogue=active_dialogue,
+    )
 
     if intent_handled:
         # 如果意图已被处理，不再进行聊天

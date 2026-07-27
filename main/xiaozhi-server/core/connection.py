@@ -176,7 +176,9 @@ class ConnectionHandler:
                 self.family_memory_runtime is not None
                 and self.family_memory_runtime.is_active
         ):
-            self.family_session_dialogues = FamilySessionDialogueStore(Dialogue)
+            self.family_session_dialogues = FamilySessionDialogueStore(
+                self._create_family_dialogue
+            )
 
         # tts相关变量
         self.sentence_id = None
@@ -1044,6 +1046,20 @@ class ConnectionHandler:
         # 更新系统prompt至上下文
         self.dialogue.update_system_message(self.prompt)
 
+    def _create_family_dialogue(self):
+        """从官方 Dialogue 复制当前连接的静态初始上下文。"""
+
+        return self.dialogue.copy_static_context()
+
+    def get_dialogue_for_turn(self, turn_identity_context=None):
+        """按本轮身份选择短期 Dialogue，关闭家庭功能时保持官方行为。"""
+
+        if self.family_session_dialogues is None:
+            return self.dialogue
+        return self.family_session_dialogues.get_dialogue(
+            turn_identity_context
+        )
+
     def chat(
         self,
         query,
@@ -1053,6 +1069,9 @@ class ConnectionHandler:
     ):
         # 保存当前任务的sentence_id到局部变量，避免被新任务覆盖
         current_sentence_id = None
+        active_dialogue = self.get_dialogue_for_turn(
+            turn_identity_context
+        )
 
         if query is not None:
             self.logger.bind(tag=TAG).info(f"大模型收到用户消息: {query}")
@@ -1061,7 +1080,7 @@ class ConnectionHandler:
         if depth == 0:
             current_sentence_id = str(uuid.uuid4().hex)
             self.sentence_id = current_sentence_id  # 更新共享属性
-            self.dialogue.put(Message(role="user", content=query))
+            active_dialogue.put(Message(role="user", content=query))
             self.tts.tts_text_queue.put(
                 TTSMessageDTO(
                     sentence_id=current_sentence_id,
@@ -1083,7 +1102,7 @@ class ConnectionHandler:
             )
             force_final_answer = True
             # 添加系统指令，要求 LLM 基于现有信息回答
-            self.dialogue.put(
+            active_dialogue.put(
                 Message(
                     role="user",
                     content="[系统提示] 已达到最大工具调用次数限制，请你基于目前已经获取的所有信息，直接给出最终答案。不要再尝试调用任何工具。",
@@ -1128,7 +1147,7 @@ class ConnectionHandler:
                 # 使用支持functions的streaming接口
                 llm_responses = self.llm.response_with_functions(
                     self.session_id,
-                    self.dialogue.get_llm_dialogue_with_memory(
+                    active_dialogue.get_llm_dialogue_with_memory(
                         memory_str, self.config.get("voiceprint", {}), speaker_for_system
                     ),
                     functions=functions,
@@ -1136,7 +1155,7 @@ class ConnectionHandler:
             else:
                 llm_responses = self.llm.response(
                     self.session_id,
-                    self.dialogue.get_llm_dialogue_with_memory(
+                    active_dialogue.get_llm_dialogue_with_memory(
                         memory_str, self.config.get("voiceprint", {}), speaker_for_system
                     ),
                 )
@@ -1294,7 +1313,7 @@ class ConnectionHandler:
                             # 写入对话历史
                             da_response = self._clean_response_garbage(da_response)
                             self.tts.store_tts_text(current_sentence_id, da_response)
-                            self.dialogue.put(Message(role="assistant", content=da_response))
+                            active_dialogue.put(Message(role="assistant", content=da_response))
 
                     if not real_tool_calls:
                         if depth == 0:
@@ -1319,7 +1338,7 @@ class ConnectionHandler:
                 if len(response_message) > 0:
                     streamed_text = "".join(response_message)
                     self.tts.store_tts_text(current_sentence_id, streamed_text)
-                    self.dialogue.put(Message(role="assistant", content=streamed_text))
+                    active_dialogue.put(Message(role="assistant", content=streamed_text))
                 response_message.clear()
 
                 # 收集所有工具调用的 Future
@@ -1372,13 +1391,14 @@ class ConnectionHandler:
                         depth=depth,
                         streamed_text=streamed_text,
                         turn_identity_context=turn_identity_context,
+                        dialogue=active_dialogue,
                     )
 
         # 存储对话内容
         if len(response_message) > 0:
             text_buff = "".join(response_message)
             self.tts.store_tts_text(current_sentence_id, text_buff)
-            self.dialogue.put(Message(role="assistant", content=text_buff))
+            active_dialogue.put(Message(role="assistant", content=text_buff))
 
         if depth == 0:
             self.tts.tts_text_queue.put(
@@ -1391,7 +1411,7 @@ class ConnectionHandler:
             # 使用lambda延迟计算，只有在DEBUG级别时才执行get_llm_dialogue()
             self.logger.bind(tag=TAG).debug(
                 lambda: json.dumps(
-                    self.dialogue.get_llm_dialogue(), indent=4, ensure_ascii=False
+                    active_dialogue.get_llm_dialogue(), indent=4, ensure_ascii=False
                 )
             )
 
@@ -1404,7 +1424,13 @@ class ConnectionHandler:
         streamed_text="",
         *,
         turn_identity_context: Optional["TurnIdentityContext"] = None,
+        dialogue=None,
     ):
+        active_dialogue = (
+            self.get_dialogue_for_turn(turn_identity_context)
+            if dialogue is None
+            else dialogue
+        )
         need_llm_tools = []
         record_tools = []
 
@@ -1422,7 +1448,7 @@ class ConnectionHandler:
                 else:
                     self.tts.tts_one_sentence(self, ContentType.TEXT, content_detail=text)
                     self.tts.store_tts_text(self.sentence_id, text)
-                self.dialogue.put(Message(role="assistant", content=text))
+                active_dialogue.put(Message(role="assistant", content=text))
             elif result.action == Action.REQLLM:
                 need_llm_tools.append((result, tool_call_data))
             elif result.action == Action.RECORD:
@@ -1450,12 +1476,12 @@ class ConnectionHandler:
                 }
                 for idx, (_, tool_call_data) in enumerate(record_tools)
             ]
-            self.dialogue.put(Message(role="assistant", tool_calls=all_tool_calls))
+            active_dialogue.put(Message(role="assistant", tool_calls=all_tool_calls))
 
             # 写入每条工具的执行结果，记录"工具返回了什么"
             for result, tool_call_data in record_tools:
                 text = result.result or ""
-                self.dialogue.put(
+                active_dialogue.put(
                     Message(
                         role="tool",
                         tool_call_id=(
@@ -1474,7 +1500,7 @@ class ConnectionHandler:
                 if resp:
                     response_parts.append(resp)
             if response_parts:
-                self.dialogue.put(Message(role="assistant", content="，".join(response_parts)))
+                active_dialogue.put(Message(role="assistant", content="，".join(response_parts)))
 
         if need_llm_tools:
             all_tool_calls = [
@@ -1493,12 +1519,12 @@ class ConnectionHandler:
                 }
                 for idx, (_, tool_call_data) in enumerate(need_llm_tools)
             ]
-            self.dialogue.put(Message(role="assistant", tool_calls=all_tool_calls))
+            active_dialogue.put(Message(role="assistant", tool_calls=all_tool_calls))
 
             for result, tool_call_data in need_llm_tools:
                 text = result.result
                 if text is not None and len(text) > 0:
-                    self.dialogue.put(
+                    active_dialogue.put(
                         Message(
                             role="tool",
                             tool_call_id=(

@@ -272,10 +272,10 @@ class IntentProvider(IntentProviderBase):
                     # 保留非工具相关的消息
                     clean_history = [
                         msg
-                        for msg in conn.dialogue.dialogue
+                        for msg in dialogue_history
                         if msg.role not in ["tool", "function"]
                     ]
-                    conn.dialogue.dialogue = clean_history
+                    dialogue_history[:] = clean_history
 
                 else:
                     # 处理函数调用

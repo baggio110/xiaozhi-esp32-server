@@ -1,5 +1,6 @@
 import uuid
 import re
+import copy
 from typing import List, Dict
 from datetime import datetime
 
@@ -30,6 +31,17 @@ class Dialogue:
 
     def put(self, message: Message):
         self.dialogue.append(message)
+
+    def copy_static_context(self):
+        """复制 system 与静态 few-shot，排除真实对话历史。"""
+
+        dialogue = Dialogue()
+        dialogue.dialogue = [
+            copy.deepcopy(message)
+            for message in self.dialogue
+            if message.role == "system" or message.is_temporary
+        ]
+        return dialogue
 
     def getMessages(self, m, dialogue):
         if m.tool_calls is not None:

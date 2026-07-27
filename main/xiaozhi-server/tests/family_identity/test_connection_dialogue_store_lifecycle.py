@@ -57,6 +57,9 @@ class CountingDialogue:
         self.__class__.instances.append(self)
         self.dialogue = []
 
+    def copy_static_context(self):
+        return CountingDialogue()
+
 
 class FakeRuntime:
     """只公开 B4a2a 允许读取的 Runtime 活跃状态。"""
@@ -82,10 +85,21 @@ def load_connection_lifecycle():
         node.name: node
         for node in connection_class.body
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        and node.name in {"__init__", "close"}
+        and node.name
+        in {
+            "__init__",
+            "_create_family_dialogue",
+            "get_dialogue_for_turn",
+            "close",
+        }
     }
     module = ast.Module(
-        body=[methods["__init__"], methods["close"]],
+        body=[
+            methods["__init__"],
+            methods["_create_family_dialogue"],
+            methods["get_dialogue_for_turn"],
+            methods["close"],
+        ],
         type_ignores=[],
     )
     ast.fix_missing_locations(module)
@@ -117,6 +131,12 @@ def load_connection_lifecycle():
         (),
         {
             "__init__": namespace["__init__"],
+            "_create_family_dialogue": namespace[
+                "_create_family_dialogue"
+            ],
+            "get_dialogue_for_turn": namespace[
+                "get_dialogue_for_turn"
+            ],
             "close": namespace["close"],
             "clear_queues": lambda self: None,
         },
@@ -182,7 +202,10 @@ class ConnectionDialogueStoreLifecycleTest(
         store = handler.family_session_dialogues
         self.assertIsInstance(store, FamilySessionDialogueStore)
         self.assertIsInstance(handler.dialogue, CountingDialogue)
-        self.assertIs(store._dialogue_factory, CountingDialogue)
+        self.assertIs(
+            store._dialogue_factory.__self__,
+            handler,
+        )
         self.assertEqual(store._personal_dialogues, {})
         self.assertIsNone(store._anonymous_dialogue)
         self.assertEqual(len(CountingDialogue.instances), 1)
@@ -287,7 +310,7 @@ class ConnectionDialogueStoreLifecycleTest(
             handler.executor.shutdown(wait=False)
             handler.executor = None
 
-    def test_chat_does_not_use_store_or_get_dialogue(self):
+    def test_chat_selects_locally_without_replacing_official_dialogue(self):
         chat = connection_method_ast("chat")
         attributes = {
             node.attr
@@ -295,9 +318,24 @@ class ConnectionDialogueStoreLifecycleTest(
             if isinstance(node, ast.Attribute)
         }
 
-        self.assertIn("dialogue", attributes)
         self.assertNotIn("family_session_dialogues", attributes)
-        self.assertNotIn("get_dialogue", attributes)
+        self.assertIn("get_dialogue_for_turn", attributes)
+        self.assertIn("get_llm_dialogue_with_memory", attributes)
+        assignments = [
+            node
+            for node in ast.walk(chat)
+            if isinstance(node, ast.Assign)
+        ]
+        self.assertFalse(
+            any(
+                isinstance(target, ast.Attribute)
+                and isinstance(target.value, ast.Name)
+                and target.value.id == "self"
+                and target.attr == "dialogue"
+                for assignment in assignments
+                for target in assignment.targets
+            )
+        )
 
     def test_close_does_not_access_identity_memory_or_sqlite(self):
         close = connection_method_ast("close")

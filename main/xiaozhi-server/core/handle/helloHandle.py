@@ -115,7 +115,9 @@ async def checkWakeupWords(conn: "ConnectionHandler", text):
     await sendAudioMessage(conn, SentenceType.LAST, [], None)
 
     # 补充对话
-    conn.dialogue.put(Message(role="assistant", content=response.get("text")))
+    conn.get_dialogue_for_turn(None).put(
+        Message(role="assistant", content=response.get("text"))
+    )
 
     # 检查是否需要更新唤醒词回复
     if time.time() - response.get("time", 0) > WAKEUP_CONFIG["refresh_time"]:

@@ -181,6 +181,16 @@ ASR 完成一轮识别后，将本轮 `RecognitionResult` 交给 Runtime 解析�
 
 本阶段尚未调用 `get_dialogue()`，也未使用 Store 替换官方 `self.dialogue`；正式聊天仍只使用原 Dialogue。个人及匿名 Dialogue 的 system prompt 和 few-shot 复制留待后续阶段。
 
+## B4a 短期 Dialogue 正式隔离
+
+家庭功能关闭时，所有入口继续使用官方 `self.dialogue`。家庭功能开启时，`ConnectionHandler.get_dialogue_for_turn()` 根据不可变 `TurnIdentityContext` 选择当前连接内的个人 Dialogue；无上下文或任一识别失败状态统一选择该连接的匿名 Dialogue。
+
+Store 工厂通过 `Dialogue.copy_static_context()` 深复制官方 Dialogue 中的 system 消息和 `is_temporary` 静态 few-shot，不复制用户、assistant、tool 等真实动态历史。每个新 Dialogue 的消息及嵌套工具调用数据彼此独立。
+
+`chat()` 在每轮开始只选择一次局部 `active_dialogue`，并将其显式传给工具结果处理；意图流程继承语音轮次的同一对象。文本、唤醒问候、无语音自动提示和来电等没有可靠声纹上下文的入口使用匿名 Dialogue，不修改 `self.dialogue`进行动态切换。
+
+本阶段仅隔离短期上下文。PowerMem 查询、画像、断开整段保存及其官方 `device_id` 行为均未修改，因此尚不能作为完整个人长期记忆功能部署。
+
 ## 第一版不包含
 
 - 智控台家庭成员页面

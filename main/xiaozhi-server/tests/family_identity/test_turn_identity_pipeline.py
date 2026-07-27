@@ -90,6 +90,9 @@ class FakeToolRecursionConnection:
         )
         self.memory = ForbiddenCallTracker("memory")
 
+    def get_dialogue_for_turn(self, turn_identity_context):
+        return self.dialogue
+
     def chat(
         self,
         query,
@@ -480,6 +483,7 @@ class StartToChatContextCaptureTest(unittest.IsolatedAsyncioTestCase):
         self.module = load_isolated_receive_audio()
         self.executor = DelayedExecutor()
         self.chat_calls = []
+        self.selected_dialogue = object()
 
         def chat(query, depth=0, *, turn_identity_context=None):
             self.chat_calls.append(
@@ -497,6 +501,7 @@ class StartToChatContextCaptureTest(unittest.IsolatedAsyncioTestCase):
             client_abort=False,
             executor=self.executor,
             chat=chat,
+            get_dialogue_for_turn=lambda context: self.selected_dialogue,
         )
 
     async def test_delayed_task_keeps_original_turn_context(self):
@@ -521,6 +526,28 @@ class StartToChatContextCaptureTest(unittest.IsolatedAsyncioTestCase):
         self.executor.run_next()
 
         self.assertEqual(("普通文本", 0, None), self.chat_calls[0])
+
+    async def test_selected_dialogue_is_passed_to_intent_pipeline(self):
+        captured = []
+
+        async def capture_intent(conn, text, *, dialogue=None):
+            captured.append((text, dialogue))
+            return False
+
+        self.module.handle_user_intent = capture_intent
+        await self.module.startToChat(
+            self.conn,
+            "个人语音",
+            turn_identity_context=self.context(
+                "person_father",
+                "voiceprint_father",
+            ),
+        )
+
+        self.assertEqual(
+            [("个人语音", self.selected_dialogue)],
+            captured,
+        )
 
     @staticmethod
     def context(person_id, voiceprint_id):
@@ -562,11 +589,21 @@ class ToolRecursionIdentityContextTest(unittest.TestCase):
             for keyword in handler_call.keywords
             if keyword.arg == "turn_identity_context"
         )
+        dialogue_keyword = next(
+            keyword
+            for keyword in handler_call.keywords
+            if keyword.arg == "dialogue"
+        )
 
         self.assertIsInstance(context_keyword.value, ast.Name)
         self.assertEqual(
             "turn_identity_context",
             context_keyword.value.id,
+        )
+        self.assertIsInstance(dialogue_keyword.value, ast.Name)
+        self.assertEqual(
+            "active_dialogue",
+            dialogue_keyword.value.id,
         )
 
     def test_reqllm_recursion_preserves_same_context(self):
@@ -633,20 +670,23 @@ class ToolRecursionIdentityContextTest(unittest.TestCase):
 
     def test_non_reqllm_result_does_not_add_recursion(self):
         connection = FakeToolRecursionConnection()
+        selected_dialogue = RecordingDialogue()
 
         self.handle_function_result(
             connection,
             [self.tool_result(self.action.RECORD)],
             depth=1,
             turn_identity_context=self.context(),
+            dialogue=selected_dialogue,
         )
 
         self.assertEqual([], connection.chat_calls)
+        self.assertEqual([], connection.dialogue.messages)
         self.assertEqual(
             ["assistant", "tool", "assistant"],
             [
                 message.role
-                for message in connection.dialogue.messages
+                for message in selected_dialogue.messages
             ],
         )
 

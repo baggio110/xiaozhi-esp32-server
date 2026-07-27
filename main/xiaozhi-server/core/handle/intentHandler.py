@@ -17,7 +17,18 @@ from core.providers.tts.dto.dto import TTSMessageDTO, SentenceType
 TAG = __name__
 
 
-async def handle_user_intent(conn: "ConnectionHandler", text):
+async def handle_user_intent(
+    conn: "ConnectionHandler",
+    text,
+    *,
+    dialogue=None,
+):
+    active_dialogue = (
+        conn.get_dialogue_for_turn(None)
+        if dialogue is None
+        else dialogue
+    )
+
     # 预处理输入文本，处理可能的JSON格式
     try:
         if text.strip().startswith("{") and text.strip().endswith("}"):
@@ -41,13 +52,22 @@ async def handle_user_intent(conn: "ConnectionHandler", text):
         # 使用支持function calling的聊天方法,不再进行意图分析
         return False
     # 使用LLM进行意图分析
-    intent_result = await analyze_intent_with_llm(conn, text)
+    intent_result = await analyze_intent_with_llm(
+        conn,
+        text,
+        dialogue=active_dialogue,
+    )
     if not intent_result:
         return False
     # 会话开始时生成sentence_id
     conn.sentence_id = str(uuid.uuid4().hex)
     # 处理各种意图
-    return await process_intent_result(conn, intent_result, text)
+    return await process_intent_result(
+        conn,
+        intent_result,
+        text,
+        dialogue=active_dialogue,
+    )
 
 
 async def check_direct_exit(conn: "ConnectionHandler", text):
@@ -63,16 +83,29 @@ async def check_direct_exit(conn: "ConnectionHandler", text):
     return False
 
 
-async def analyze_intent_with_llm(conn: "ConnectionHandler", text):
+async def analyze_intent_with_llm(
+    conn: "ConnectionHandler",
+    text,
+    *,
+    dialogue=None,
+):
     """使用LLM分析用户意图"""
     if not hasattr(conn, "intent") or not conn.intent:
         conn.logger.bind(tag=TAG).warning("意图识别服务未初始化")
         return None
 
     # 对话历史记录
-    dialogue = conn.dialogue
+    active_dialogue = (
+        conn.get_dialogue_for_turn(None)
+        if dialogue is None
+        else dialogue
+    )
     try:
-        intent_result = await conn.intent.detect_intent(conn, dialogue.dialogue, text)
+        intent_result = await conn.intent.detect_intent(
+            conn,
+            active_dialogue.dialogue,
+            text,
+        )
         return intent_result
     except Exception as e:
         conn.logger.bind(tag=TAG).error(f"意图识别失败: {str(e)}")
@@ -81,9 +114,18 @@ async def analyze_intent_with_llm(conn: "ConnectionHandler", text):
 
 
 async def process_intent_result(
-    conn: "ConnectionHandler", intent_result, original_text
+    conn: "ConnectionHandler",
+    intent_result,
+    original_text,
+    *,
+    dialogue=None,
 ):
     """处理意图识别结果"""
+    active_dialogue = (
+        conn.get_dialogue_for_turn(None)
+        if dialogue is None
+        else dialogue
+    )
     try:
         # 尝试将结果解析为JSON
         intent_data = json.loads(intent_result)
@@ -103,7 +145,7 @@ async def process_intent_result(
                 conn.client_abort = False
 
                 def process_context_result():
-                    conn.dialogue.put(Message(role="user", content=original_text))
+                    active_dialogue.put(Message(role="user", content=original_text))
 
                     from core.utils.current_time import get_current_time_info
 
@@ -128,7 +170,11 @@ async def process_intent_result(
                         conn.logger.bind(tag=TAG).error(f"LLM生成回复失败: {e}")
                         response = None
                     if response:
-                        speak_txt(conn, response)
+                        speak_txt(
+                            conn,
+                            response,
+                            dialogue=active_dialogue,
+                        )
 
                 conn.executor.submit(process_context_result)
                 return True
@@ -164,8 +210,8 @@ async def process_intent_result(
 
             # 使用executor执行函数调用和结果处理
             def process_function_call():
-                conn.dialogue.put(Message(role="user", content=original_text))
-                
+                active_dialogue.put(Message(role="user", content=original_text))
+
                 # 工具调用超时时间
                 tool_call_timeout = int(conn.config.get("tool_call_timeout", 30))
                 # 使用统一工具处理器处理所有工具调用
@@ -189,10 +235,14 @@ async def process_intent_result(
                     if result.action == Action.RESPONSE:  # 直接回复前端
                         text = result.response
                         if text is not None:
-                            speak_txt(conn, text)
+                            speak_txt(
+                                conn,
+                                text,
+                                dialogue=active_dialogue,
+                            )
                     elif result.action == Action.REQLLM:  # 调用函数后再请求llm生成回复
                         text = result.result
-                        conn.dialogue.put(Message(role="tool", content=text))
+                        active_dialogue.put(Message(role="tool", content=text))
                         # 使用异步调用避免阻塞事件循环，影响其他设备的音频播放
                         try:
                             llm_result = asyncio.run_coroutine_threadsafe(
@@ -204,14 +254,22 @@ async def process_intent_result(
                             llm_result = text
                         if llm_result is None:
                             llm_result = text
-                        speak_txt(conn, llm_result)
+                        speak_txt(
+                            conn,
+                            llm_result,
+                            dialogue=active_dialogue,
+                        )
                     elif (
                         result.action == Action.NOTFOUND
                         or result.action == Action.ERROR
                     ):
                         text = result.response if result.response else result.result
                         if text is not None:
-                            speak_txt(conn, text)
+                            speak_txt(
+                                conn,
+                                text,
+                                dialogue=active_dialogue,
+                            )
                     elif function_name != "play_music":
                         # For backward compatibility with original code
                         # 获取当前最新的文本索引
@@ -219,7 +277,11 @@ async def process_intent_result(
                         if text is None:
                             text = result.result
                         if text is not None:
-                            speak_txt(conn, text)
+                            speak_txt(
+                                conn,
+                                text,
+                                dialogue=active_dialogue,
+                            )
 
             # 将函数执行放在线程池中
             conn.executor.submit(process_function_call)
@@ -230,7 +292,18 @@ async def process_intent_result(
         return False
 
 
-def speak_txt(conn: "ConnectionHandler", text):
+def speak_txt(
+    conn: "ConnectionHandler",
+    text,
+    *,
+    dialogue=None,
+):
+    active_dialogue = (
+        conn.get_dialogue_for_turn(None)
+        if dialogue is None
+        else dialogue
+    )
+
     # 记录文本到 sentence_id 映射
     conn.tts.store_tts_text(conn.sentence_id, text)
 
@@ -249,4 +322,4 @@ def speak_txt(conn: "ConnectionHandler", text):
             content_type=ContentType.ACTION,
         )
     )
-    conn.dialogue.put(Message(role="assistant", content=text))
+    active_dialogue.put(Message(role="assistant", content=text))
