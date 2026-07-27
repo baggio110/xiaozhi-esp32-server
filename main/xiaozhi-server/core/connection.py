@@ -1360,7 +1360,12 @@ class ConnectionHandler:
 
                 # 统一处理工具调用结果
                 if tool_results:
-                    self._handle_function_result(tool_results, depth=depth, streamed_text=streamed_text)
+                    self._handle_function_result(
+                        tool_results,
+                        depth=depth,
+                        streamed_text=streamed_text,
+                        turn_identity_context=turn_identity_context,
+                    )
 
         # 存储对话内容
         if len(response_message) > 0:
@@ -1385,7 +1390,14 @@ class ConnectionHandler:
 
         return True
 
-    def _handle_function_result(self, tool_results, depth, streamed_text=""):
+    def _handle_function_result(
+        self,
+        tool_results,
+        depth,
+        streamed_text="",
+        *,
+        turn_identity_context: Optional["TurnIdentityContext"] = None,
+    ):
         need_llm_tools = []
         record_tools = []
 

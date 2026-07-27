@@ -7,7 +7,9 @@ import json
 import sys
 import types
 import unittest
+import uuid
 from pathlib import Path
+from typing import Optional
 from unittest.mock import patch
 
 from core.family_identity import (
@@ -33,6 +35,112 @@ RECEIVE_AUDIO_PATH = (
 )
 WEBSOCKET_SERVER_PATH = SERVER_ROOT / "core" / "websocket_server.py"
 CONNECTION_PATH = SERVER_ROOT / "core" / "connection.py"
+
+
+class CapturedMessage:
+    """记录工具递归测试产生的 Dialogue 消息。"""
+
+    def __init__(
+        self,
+        role,
+        content=None,
+        tool_calls=None,
+        tool_call_id=None,
+        **kwargs,
+    ):
+        self.role = role
+        self.content = content
+        self.tool_calls = tool_calls
+        self.tool_call_id = tool_call_id
+
+
+class RecordingDialogue:
+    """只记录写入，不启动真实 Dialogue 或 LLM。"""
+
+    def __init__(self):
+        self.messages = []
+
+    def put(self, message):
+        self.messages.append(message)
+
+
+class ForbiddenCallTracker:
+    """任何身份或记忆访问都会让测试立即失败。"""
+
+    def __init__(self, name):
+        self.name = name
+        self.calls = 0
+
+    def __getattr__(self, attribute):
+        self.calls += 1
+        raise AssertionError(
+            f"B3d 不得访问 {self.name}.{attribute}"
+        )
+
+
+class FakeToolRecursionConnection:
+    """承载生产方法的最小 ConnectionHandler 测试替身。"""
+
+    def __init__(self):
+        self.dialogue = RecordingDialogue()
+        self.chat_calls = []
+        self.current_speaker = None
+        self.family_memory_runtime = ForbiddenCallTracker(
+            "family_memory_runtime"
+        )
+        self.memory = ForbiddenCallTracker("memory")
+
+    def chat(
+        self,
+        query,
+        depth=0,
+        *,
+        turn_identity_context=None,
+    ):
+        self.chat_calls.append(
+            (query, depth, turn_identity_context)
+        )
+
+
+def load_handle_function_result():
+    """从 production AST 加载待测方法，避免初始化真实业务组件。"""
+
+    tree = ast.parse(CONNECTION_PATH.read_text(encoding="utf-8"))
+    connection_class = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef)
+        and node.name == "ConnectionHandler"
+    )
+    method = next(
+        node
+        for node in connection_class.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_handle_function_result"
+    )
+    action = types.SimpleNamespace(
+        RESPONSE="response",
+        NOTFOUND="notfound",
+        ERROR="error",
+        REQLLM="reqllm",
+        RECORD="record",
+    )
+    namespace = {
+        "Action": action,
+        "CapturedMessage": CapturedMessage,
+        "ContentType": types.SimpleNamespace(TEXT="text"),
+        "Message": CapturedMessage,
+        "Optional": Optional,
+        "uuid": uuid,
+    }
+    module = ast.fix_missing_locations(
+        ast.Module(body=[method], type_ignores=[])
+    )
+    exec(
+        compile(module, str(CONNECTION_PATH), "exec"),
+        namespace,
+    )
+    return namespace["_handle_function_result"], action
 
 
 class FakeLogger:
@@ -425,6 +533,198 @@ class StartToChatContextCaptureTest(unittest.IsolatedAsyncioTestCase):
                 person,
                 voiceprint_id,
             ),
+        )
+
+
+class ToolRecursionIdentityContextTest(unittest.TestCase):
+    def setUp(self):
+        self.handle_function_result, self.action = (
+            load_handle_function_result()
+        )
+
+    def test_chat_passes_context_to_function_result_by_keyword(self):
+        tree = ast.parse(CONNECTION_PATH.read_text(encoding="utf-8"))
+        chat = next(
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "chat"
+        )
+        handler_call = next(
+            node
+            for node in ast.walk(chat)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "_handle_function_result"
+        )
+        context_keyword = next(
+            keyword
+            for keyword in handler_call.keywords
+            if keyword.arg == "turn_identity_context"
+        )
+
+        self.assertIsInstance(context_keyword.value, ast.Name)
+        self.assertEqual(
+            "turn_identity_context",
+            context_keyword.value.id,
+        )
+
+    def test_reqllm_recursion_preserves_same_context(self):
+        connection = FakeToolRecursionConnection()
+        context = self.context()
+        original_fields = (
+            context.session_id,
+            context.turn_id,
+            context.device_id,
+            context.identity_decision,
+        )
+
+        self.handle_function_result(
+            connection,
+            [self.tool_result(self.action.REQLLM)],
+            depth=2,
+            turn_identity_context=context,
+        )
+
+        self.assertEqual(1, len(connection.chat_calls))
+        query, depth, recursive_context = connection.chat_calls[0]
+        self.assertIsNone(query)
+        self.assertEqual(3, depth)
+        self.assertIs(context, recursive_context)
+        self.assertEqual(
+            original_fields,
+            (
+                recursive_context.session_id,
+                recursive_context.turn_id,
+                recursive_context.device_id,
+                recursive_context.identity_decision,
+            ),
+        )
+
+    def test_current_speaker_change_does_not_replace_context(self):
+        connection = FakeToolRecursionConnection()
+        context = self.context()
+        connection.current_speaker = "妈妈"
+
+        self.handle_function_result(
+            connection,
+            [self.tool_result(self.action.REQLLM)],
+            depth=0,
+            turn_identity_context=context,
+        )
+
+        recursive_context = connection.chat_calls[0][2]
+        self.assertIs(context, recursive_context)
+        self.assertEqual(
+            "family_001:person_father",
+            recursive_context.identity_decision.memory_user_id,
+        )
+
+    def test_legacy_call_without_context_recurses_with_none(self):
+        connection = FakeToolRecursionConnection()
+
+        self.handle_function_result(
+            connection,
+            [self.tool_result(self.action.REQLLM)],
+            depth=0,
+        )
+
+        self.assertEqual([(None, 1, None)], connection.chat_calls)
+
+    def test_non_reqllm_result_does_not_add_recursion(self):
+        connection = FakeToolRecursionConnection()
+
+        self.handle_function_result(
+            connection,
+            [self.tool_result(self.action.RECORD)],
+            depth=1,
+            turn_identity_context=self.context(),
+        )
+
+        self.assertEqual([], connection.chat_calls)
+        self.assertEqual(
+            ["assistant", "tool", "assistant"],
+            [
+                message.role
+                for message in connection.dialogue.messages
+            ],
+        )
+
+    def test_depth_handoff_and_limit_constant_remain_unchanged(self):
+        connection = FakeToolRecursionConnection()
+
+        self.handle_function_result(
+            connection,
+            [self.tool_result(self.action.REQLLM)],
+            depth=4,
+            turn_identity_context=self.context(),
+        )
+
+        self.assertEqual(5, connection.chat_calls[0][1])
+        tree = ast.parse(CONNECTION_PATH.read_text(encoding="utf-8"))
+        chat = next(
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "chat"
+        )
+        max_depth = next(
+            node
+            for node in ast.walk(chat)
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name)
+                and target.id == "MAX_DEPTH"
+                for target in node.targets
+            )
+        )
+        self.assertEqual(5, max_depth.value.value)
+
+    def test_tool_recursion_does_not_access_identity_or_memory(self):
+        connection = FakeToolRecursionConnection()
+
+        self.handle_function_result(
+            connection,
+            [self.tool_result(self.action.REQLLM)],
+            depth=0,
+            turn_identity_context=self.context(),
+        )
+
+        self.assertEqual(
+            0,
+            connection.family_memory_runtime.calls,
+        )
+        self.assertEqual(0, connection.memory.calls)
+
+    @staticmethod
+    def context():
+        return TurnIdentityContext(
+            session_id="session_001",
+            turn_id="turn_001",
+            device_id="device_001",
+            identity_decision=IdentityDecision.recognized(
+                PersonIdentity(
+                    "family_001",
+                    "person_father",
+                    "爸爸",
+                ),
+                "voiceprint_father",
+            ),
+        )
+
+    @staticmethod
+    def tool_result(action):
+        return (
+            types.SimpleNamespace(
+                action=action,
+                result="工具结果",
+                response="工具回复",
+            ),
+            {
+                "id": "tool_call_001",
+                "name": "test_tool",
+                "arguments": "{}",
+            },
         )
 
 
