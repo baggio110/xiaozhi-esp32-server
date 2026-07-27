@@ -45,6 +45,7 @@ from core.utils.prompt_manager import PromptManager
 from core.utils.voiceprint_provider import VoiceprintProvider
 from core.utils.util import get_system_error_response
 from core.utils import textUtils
+from core.family_identity.session_dialogues import FamilySessionDialogueStore
 
 if TYPE_CHECKING:
     from core.family_identity import FamilyMemoryRuntime, TurnIdentityContext
@@ -170,6 +171,12 @@ class ConnectionHandler:
 
         # llm相关变量
         self.dialogue = Dialogue()
+        self.family_session_dialogues = None
+        if (
+                self.family_memory_runtime is not None
+                and self.family_memory_runtime.is_active
+        ):
+            self.family_session_dialogues = FamilySessionDialogueStore(Dialogue)
 
         # tts相关变量
         self.sentence_id = None
@@ -1662,6 +1669,13 @@ class ConnectionHandler:
         except Exception as e:
             self.logger.bind(tag=TAG).error(f"关闭连接时出错: {e}")
         finally:
+            family_session_dialogues = self.family_session_dialogues
+            self.family_session_dialogues = None
+            if family_session_dialogues is not None:
+                try:
+                    family_session_dialogues.clear()
+                except Exception:
+                    pass
             # 确保停止事件被设置
             if self.stop_event:
                 self.stop_event.set()

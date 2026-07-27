@@ -175,6 +175,12 @@ ASR 完成一轮识别后，将本轮 `RecognitionResult` 交给 Runtime 解析�
 
 本阶段仅实现独立的 `FamilySessionDialogueStore` 及其生命周期契约，尚未接入 `ConnectionHandler`。Dialogue 工厂如何复制 system prompt 和 few-shot 内容留待 B4a2。
 
+## B4a2a Store 生命周期接入
+
+每个家庭记忆 Runtime 已启动的 `ConnectionHandler` 独立持有一个 `FamilySessionDialogueStore`，Store 生命周期与当前连接一致，并在连接关闭时调用 `clear()`。
+
+本阶段尚未调用 `get_dialogue()`，也未使用 Store 替换官方 `self.dialogue`；正式聊天仍只使用原 Dialogue。个人及匿名 Dialogue 的 system prompt 和 few-shot 复制留待后续阶段。
+
 ## 第一版不包含
 
 - 智控台家庭成员页面
