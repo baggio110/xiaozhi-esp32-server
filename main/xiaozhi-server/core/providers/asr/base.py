@@ -13,6 +13,7 @@ import threading
 
 from abc import ABC, abstractmethod
 from config.logger import setup_logging
+from core.family_identity.models import IdentityStatus, RecognitionResult
 from core.providers.asr.dto.dto import InterfaceType
 from core.handle.receiveAudioHandle import startToChat
 from core.handle.reportHandle import enqueue_asr_report
@@ -123,7 +124,7 @@ class ASRProviderBase(ABC):
                 logger.bind(tag=TAG).error(f"声纹识别失败: {voiceprint_result}")
                 speaker_name = ""
             else:
-                speaker_name = voiceprint_result
+                speaker_name = self._get_speaker_name(voiceprint_result)
 
             # 判断 ASR 结果类型
             if isinstance(raw_text, dict):
@@ -182,6 +183,17 @@ class ASRProviderBase(ABC):
             )
         else:
             return text
+
+    def _get_speaker_name(self, result: object) -> Optional[str]:
+        """仅从成功的结构化声纹结果中提取显示名称。"""
+        if (
+            isinstance(result, RecognitionResult)
+            and result.status is IdentityStatus.RECOGNIZED
+            and isinstance(result.speaker_name, str)
+            and result.speaker_name.strip()
+        ):
+            return result.speaker_name
+        return None
 
     def _pcm_to_wav(self, pcm_data: bytes) -> bytes:
         """将PCM数据转换为WAV格式"""

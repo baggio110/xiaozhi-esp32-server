@@ -138,6 +138,21 @@ B2a 尚未接入现有 `config.yaml`、配置加载器、声纹、连接、对�
 
 Runtime 在现有服务关闭 `finally` 中调用 `close()`。关闭状态不创建数据库，也不改变 WebSocket、HTTP、聊天或记忆模块的构造参数；启用状态只初始化身份 Repository，尚未向连接、声纹、对话或 PowerMem 传递 Repository。
 
+## B3a 结构化声纹结果
+
+`VoiceprintProvider.identify_speaker()` 返回阶段 A 的 `RecognitionResult`，保留声纹服务响应中的 `speaker_id`（映射为 `voiceprint_id`）、`score`（映射为 `confidence`）以及现有 `speaker_map` 中的显示名称。
+
+响应映射遵循失败关闭原则：
+
+- 有效声纹、达到现有阈值且存在名称映射：`RECOGNIZED`；
+- 空或缺失 `speaker_id`：`UNKNOWN_VOICEPRINT`；
+- 低于现有阈值：`LOW_CONFIDENCE`；
+- 有效 `speaker_id` 没有本地名称映射：`PERSON_NOT_BOUND`；
+- 超时、HTTP 错误或服务异常：`SERVICE_UNAVAILABLE`；
+- 非 JSON、字段类型错误或无效结构：`INVALID_RESULT`。
+
+`ASRProviderBase.handle_voice_stop()` 只从 `RECOGNIZED` 结果中提取非空 `speaker_name`，继续生成官方原有的 `{"speaker": "...", "content": "..."}` 输入。其他状态以及未启用声纹时仍使用原有非个人化聊天输入。本阶段不解析 `person_id`、不生成 `memory_user_id`，也不改变 PowerMem 的官方 `device_id` 行为。
+
 ## 第一版不包含
 
 - 智控台家庭成员页面

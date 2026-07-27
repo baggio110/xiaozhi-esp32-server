@@ -1,10 +1,12 @@
 import asyncio
+import math
 import time
 import aiohttp
 import requests
 from urllib.parse import urlparse, parse_qs
-from typing import Optional, Dict
+from typing import Dict
 from config.logger import setup_logging
+from core.family_identity.models import IdentityStatus, RecognitionResult
 from core.utils.cache.manager import cache_manager
 from core.utils.cache.config import CacheType
 
@@ -137,11 +139,21 @@ class VoiceprintProvider:
         
         return is_healthy
     
-    async def identify_speaker(self, audio_data: bytes, session_id: str) -> Optional[str]:
-        """识别说话人"""
+    async def identify_speaker(
+        self,
+        audio_data: bytes,
+        session_id: str,
+    ) -> RecognitionResult:
+        """识别说话人并保留声纹服务返回的结构化身份信息。"""
         if not self.enabled or not self.api_url or not self.api_key:
             logger.bind(tag=TAG).debug("声纹识别功能已禁用或未配置，跳过识别")
-            return None
+            return RecognitionResult(
+                voiceprint_id=None,
+                speaker_name=None,
+                confidence=None,
+                status=IdentityStatus.SERVICE_UNAVAILABLE,
+                error_code="voiceprint_disabled",
+            )
             
         try:
             api_start_time = time.monotonic()
@@ -161,38 +173,149 @@ class VoiceprintProvider:
             
             # 网络请求
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.post(self.api_url, headers=headers, data=data) as response:
+                async with session.post(
+                    self.api_url,
+                    headers=headers,
+                    data=data,
+                ) as response:
                     
                     if response.status == 200:
-                        result = await response.json()
+                        try:
+                            result = await response.json()
+                        except (aiohttp.ContentTypeError, ValueError, TypeError):
+                            return RecognitionResult(
+                                voiceprint_id=None,
+                                speaker_name=None,
+                                confidence=None,
+                                status=IdentityStatus.INVALID_RESULT,
+                                error_code="invalid_response_json",
+                            )
+
+                        if not isinstance(result, dict):
+                            return RecognitionResult(
+                                voiceprint_id=None,
+                                speaker_name=None,
+                                confidence=None,
+                                status=IdentityStatus.INVALID_RESULT,
+                                error_code="invalid_response_format",
+                            )
+
                         speaker_id = result.get("speaker_id")
-                        score = result.get("score", 0)
+                        score = result.get("score")
                         total_elapsed_time = time.monotonic() - api_start_time
                         
                         logger.bind(tag=TAG).info(f"声纹识别耗时: {total_elapsed_time:.3f}s")
+
+                        if (
+                            not isinstance(score, (int, float))
+                            or isinstance(score, bool)
+                            or not math.isfinite(score)
+                        ):
+                            return RecognitionResult(
+                                voiceprint_id=(
+                                    speaker_id
+                                    if isinstance(speaker_id, str)
+                                    and speaker_id
+                                    else None
+                                ),
+                                speaker_name=None,
+                                confidence=None,
+                                status=IdentityStatus.INVALID_RESULT,
+                                error_code="invalid_score",
+                            )
+
+                        confidence = float(score)
+
+                        if speaker_id is None or speaker_id == "":
+                            return RecognitionResult(
+                                voiceprint_id=None,
+                                speaker_name=None,
+                                confidence=confidence,
+                                status=IdentityStatus.UNKNOWN_VOICEPRINT,
+                                error_code="speaker_id_missing",
+                            )
+
+                        if not isinstance(speaker_id, str):
+                            return RecognitionResult(
+                                voiceprint_id=None,
+                                speaker_name=None,
+                                confidence=confidence,
+                                status=IdentityStatus.INVALID_RESULT,
+                                error_code="invalid_speaker_id",
+                            )
                         
                         # 相似度阈值检查
-                        if score < self.similarity_threshold:
-                            logger.bind(tag=TAG).warning(f"声纹识别相似度{score:.3f}低于阈值{self.similarity_threshold}")
-                            return "未知说话人"
+                        if confidence < self.similarity_threshold:
+                            logger.bind(tag=TAG).warning(
+                                f"声纹识别相似度{confidence:.3f}低于阈值"
+                                f"{self.similarity_threshold}"
+                            )
+                            return RecognitionResult(
+                                voiceprint_id=speaker_id,
+                                speaker_name=None,
+                                confidence=confidence,
+                                status=IdentityStatus.LOW_CONFIDENCE,
+                                error_code="confidence_below_threshold",
+                            )
                         
                         if speaker_id and speaker_id in self.speaker_map:
                             result_name = self.speaker_map[speaker_id]["name"]
-                            logger.bind(tag=TAG).info(f"声纹识别成功: {result_name} (相似度: {score:.3f})")
-                            return result_name
+                            if result_name:
+                                logger.bind(tag=TAG).info(
+                                    f"声纹识别成功: {result_name} "
+                                    f"(相似度: {confidence:.3f})"
+                                )
+                                return RecognitionResult(
+                                    voiceprint_id=speaker_id,
+                                    speaker_name=result_name,
+                                    confidence=confidence,
+                                    status=IdentityStatus.RECOGNIZED,
+                                )
+
+                            return RecognitionResult(
+                                voiceprint_id=speaker_id,
+                                speaker_name=None,
+                                confidence=confidence,
+                                status=IdentityStatus.PERSON_NOT_BOUND,
+                                error_code="speaker_name_not_bound",
+                            )
                         else:
                             logger.bind(tag=TAG).warning(f"未识别的说话人ID: {speaker_id}")
-                            return "未知说话人"
+                            return RecognitionResult(
+                                voiceprint_id=speaker_id,
+                                speaker_name=None,
+                                confidence=confidence,
+                                status=IdentityStatus.PERSON_NOT_BOUND,
+                                error_code="speaker_not_bound",
+                            )
                     else:
                         logger.bind(tag=TAG).error(f"声纹识别API错误: HTTP {response.status}")
-                        return None
+                        return RecognitionResult(
+                            voiceprint_id=None,
+                            speaker_name=None,
+                            confidence=None,
+                            status=IdentityStatus.SERVICE_UNAVAILABLE,
+                            error_code="voiceprint_http_error",
+                        )
                         
         except asyncio.TimeoutError:
             elapsed = time.monotonic() - api_start_time
             logger.bind(tag=TAG).error(f"声纹识别超时: {elapsed:.3f}s")
-            return None
+            return RecognitionResult(
+                voiceprint_id=None,
+                speaker_name=None,
+                confidence=None,
+                status=IdentityStatus.SERVICE_UNAVAILABLE,
+                error_code="voiceprint_timeout",
+            )
         except Exception as e:
             elapsed = time.monotonic() - api_start_time
             logger.bind(tag=TAG).error(f"声纹识别失败: {e}")
-            return None
+            return RecognitionResult(
+                voiceprint_id=None,
+                speaker_name=None,
+                confidence=None,
+                status=IdentityStatus.SERVICE_UNAVAILABLE,
+                error_code="voiceprint_service_error",
+            )
 
