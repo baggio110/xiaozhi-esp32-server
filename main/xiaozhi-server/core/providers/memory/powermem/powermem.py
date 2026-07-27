@@ -150,7 +150,12 @@ class MemoryProvider(MemoryProviderBase):
             logger.bind(tag=TAG).debug(f"Detailed error: {traceback.format_exc()}")
             self.use_powermem = False
 
-    async def save_memory(self, msgs, session_id=None):
+    async def save_memory(
+        self,
+        msgs,
+        session_id=None,
+        user_id: Optional[str] = None,
+    ):
         """
         Save conversation messages to PowerMem.
 
@@ -159,11 +164,23 @@ class MemoryProvider(MemoryProviderBase):
 
             session_id: Session identifier (optional, for compatibility)
 
+            user_id: Explicit PowerMem user identifier. When omitted, keep the
+                official role_id behavior for backward compatibility.
+
         Returns:
             Result from PowerMem API or None if failed
         """
         try:
             if self.use_powermem and self.memory_client is not None and len(msgs) >= 2:
+                effective_user_id = (
+                    self.role_id if user_id is None else user_id
+                )
+                if not effective_user_id:
+                    logger.bind(tag=TAG).debug(
+                        "No role_id or explicit user_id set, skipping save_memory"
+                    )
+                    return None
+
                 # Format the content as a message list for PowerMem
                 messages = []
                 for message in msgs:
@@ -191,13 +208,13 @@ class MemoryProvider(MemoryProviderBase):
                     result = await asyncio.to_thread(
                         self.memory_client.add,
                         messages=messages,
-                        user_id=self.role_id
+                        user_id=effective_user_id
                     )
                 else:
                     # AsyncMemory uses async add
                     result = await self.memory_client.add(
                         messages=messages,
-                        user_id=self.role_id
+                        user_id=effective_user_id
                     )
 
                 logger.bind(tag=TAG).debug(f"Save memory result: {result}")
@@ -205,8 +222,15 @@ class MemoryProvider(MemoryProviderBase):
                 # Cache user profile if UserMemory mode and profile was extracted
                 if self.enable_user_profile and result:
                     if result.get('profile_extracted'):
-                        self.last_profile_content = result.get('profile_content', '')
-                        logger.bind(tag=TAG).debug(f"User profile extracted: {self.last_profile_content}")
+                        profile_content = result.get('profile_content', '')
+                        self._cache_profile(
+                            effective_user_id,
+                            profile_content,
+                            legacy_cache=user_id is None,
+                        )
+                        logger.bind(tag=TAG).debug(
+                            f"User profile extracted: {profile_content}"
+                        )
             else:
                 if not self.use_powermem or self.memory_client is None:
                     logger.bind(tag=TAG).warning("PowerMem is not available, skipping save_memory")

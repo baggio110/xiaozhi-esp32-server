@@ -213,6 +213,33 @@ Provider 的 `role_id`。
 消息副本，不写入个人 Dialogue、匿名 Dialogue 或静态模板。本阶段不修改
 `save_memory()`、逐轮保存或断开连接整段保存。
 
+## B4c PowerMem 个人逐轮写入
+
+家庭功能开启时，每个最外层 `chat(depth=0)` 建立仅属于当前逻辑轮次的局部保存状态。工具 `REQLLM` 递归显式复用同一个状态和原始不可变 `TurnIdentityContext`；递归层不单独保存，只有最外层在完整最终回答形成后尝试一次写入。
+
+写入前继续复用 `MemoryAccessPolicy.user_id_for_write()` 和
+`family_id:person_id` 精确匹配校验。只有已识别且允许写入的人员使用
+`save_memory(messages, user_id=memory_user_id)`；匿名、所有失败状态、空上下文、
+非法身份、空输入、空回答、中断或异常轮次均不调用私人保存，也不回退到
+`device_id`、显示名称、声纹凭据或上一位人员。
+
+每次家庭个人写入严格只包含两条 OpenAI 角色消息：当前用户输入与按实际输出顺序
+聚合的最终 assistant 自然语言。system、静态 few-shot、记忆和画像注入、
+tool_calls、tool 结果、其他人员历史及此前轮次均不进入保存内容。保存失败只记录
+现有风格的错误，不重试、不切换身份，也不影响已经生成的回答。
+
+PowerMem Provider 的 `save_memory()` 增加向后兼容的可选 `user_id` 参数。显式值
+直接传给 SDK 的 `UserMemory.add()` 或 `AsyncMemory.add()`，共享 Provider 的
+`role_id` 不参与人员切换；未传值时仍使用官方 `role_id/device_id` 行为。
+
+家庭模式连接断开时只跳过官方整段 Dialogue 记忆保存线程，仍执行标题、连接关闭、
+资源清理和 Store 清空，不补存个人或匿名历史。家庭功能关闭时，原整段 Dialogue、
+`role_id/device_id`、daemon 线程和容错行为保持不变。
+
+当前项目声明 `powermem>=0.3.1`，实际部署版本及共享客户端的并发能力仍须在部署
+验收阶段确认和压测；本阶段只保证每次调用显式携带独立 `user_id`，不引入共享可变
+人员状态。
+
 ## 第一版不包含
 
 - 智控台家庭成员页面

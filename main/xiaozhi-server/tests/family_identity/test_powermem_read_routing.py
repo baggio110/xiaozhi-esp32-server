@@ -105,6 +105,22 @@ GET_MEMORY_USER_ID_FOR_TURN = load_connection_method(
         "build_memory_user_id": build_memory_user_id,
     },
 )
+APPEND_FAMILY_TURN_ASSISTANT_TEXT = load_connection_method(
+    "_append_family_turn_assistant_text",
+    {},
+)
+MARK_FAMILY_TURN_INCOMPLETE = load_connection_method(
+    "_mark_family_turn_incomplete",
+    {},
+)
+SAVE_FAMILY_TURN_MEMORY = load_connection_method(
+    "_save_family_turn_memory",
+    {
+        "asyncio": asyncio,
+        "Message": Message,
+        "TAG": "test.connection",
+    },
+)
 
 
 class ImmediateFuture:
@@ -166,6 +182,7 @@ class RecordingLLM:
 class RecordingMemory:
     def __init__(self, *, fail=False):
         self.calls = []
+        self.save_calls = []
         self.fail = fail
 
     async def query_memory(self, query, user_id=OMITTED):
@@ -175,9 +192,19 @@ class RecordingMemory:
         identity = "legacy" if user_id is OMITTED else user_id
         return f"memory:{identity}"
 
+    async def save_memory(self, messages, user_id=OMITTED):
+        self.save_calls.append((messages, user_id))
+
 
 class MemoryRoutingConnection:
     chat = CHAT
+    _append_family_turn_assistant_text = staticmethod(
+        APPEND_FAMILY_TURN_ASSISTANT_TEXT
+    )
+    _mark_family_turn_incomplete = staticmethod(
+        MARK_FAMILY_TURN_INCOMPLETE
+    )
+    _save_family_turn_memory = SAVE_FAMILY_TURN_MEMORY
     get_memory_user_id_for_turn = staticmethod(
         GET_MEMORY_USER_ID_FOR_TURN
     )
@@ -731,39 +758,26 @@ class PowerMemSourceContractTest(unittest.TestCase):
         ]
         self.assertEqual([], assignments)
 
-    def test_save_memory_call_and_disconnect_path_are_unchanged(self):
-        diff = __import__("subprocess").run(
-            [
-                "git",
-                "diff",
-                "--unified=0",
-                "HEAD",
-                "--",
-                "main/xiaozhi-server/core/connection.py",
-                (
-                    "main/xiaozhi-server/core/providers/memory/"
-                    "powermem/powermem.py"
-                ),
-            ],
-            cwd=SERVER_ROOT.parents[1],
-            check=True,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-        ).stdout
-        changed_lines = [
-            line
-            for line in diff.splitlines()
-            if line.startswith(("+", "-"))
-            and not line.startswith(("+++", "---"))
-        ]
-        self.assertFalse(
-            any(
-                "save_memory(" in line
-                or "self.dialogue.dialogue, self.session_id" in line
-                for line in changed_lines
-            )
-        )
+    def test_save_memory_signature_is_backward_compatible(self):
+        for path in (
+            SERVER_ROOT / "core" / "providers" / "memory" / "base.py",
+            SERVER_ROOT
+            / "core"
+            / "providers"
+            / "memory"
+            / "powermem"
+            / "powermem.py",
+        ):
+            with self.subTest(path=path):
+                tree = ast.parse(path.read_text(encoding="utf-8"))
+                method = next(
+                    node
+                    for node in ast.walk(tree)
+                    if isinstance(node, ast.AsyncFunctionDef)
+                    and node.name == "save_memory"
+                )
+                self.assertEqual("user_id", method.args.args[-1].arg)
+                self.assertIsNone(method.args.defaults[-1].value)
 
     def test_reqlmm_recursion_preserves_original_turn_context(self):
         tree = ast.parse(CONNECTION_PATH.read_text(encoding="utf-8"))

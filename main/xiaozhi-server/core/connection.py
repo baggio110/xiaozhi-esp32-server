@@ -318,7 +318,7 @@ class ConnectionHandler:
                 threading.Thread(target=generate_title_task, daemon=True).start()
 
             # 守护线程2：走老流程记忆保存（仅记忆，不含标题）
-            if self.memory:
+            if self.memory and not self.is_family_memory_active():
                 # 使用线程池异步保存记忆
                 def save_memory_task():
                     try:
@@ -1069,16 +1069,25 @@ class ConnectionHandler:
         return self.family_session_dialogues is not None
 
     @staticmethod
-    def get_memory_user_id_for_turn(turn_identity_context=None):
+    def get_memory_user_id_for_turn(
+        turn_identity_context=None,
+        *,
+        for_write=False,
+    ):
         """从不可变轮次身份中取得经过授权的 PowerMem user_id。"""
 
         if not isinstance(turn_identity_context, TurnIdentityContext):
             return None
         decision = turn_identity_context.identity_decision
         try:
-            memory_user_id = MemoryAccessPolicy.user_id_for_read(
-                decision
-            )
+            if for_write:
+                memory_user_id = MemoryAccessPolicy.user_id_for_write(
+                    decision
+                )
+            else:
+                memory_user_id = MemoryAccessPolicy.user_id_for_read(
+                    decision
+                )
             expected_user_id = build_memory_user_id(
                 decision.family_id,
                 decision.person_id,
@@ -1095,12 +1104,24 @@ class ConnectionHandler:
         depth=0,
         *,
         turn_identity_context: Optional["TurnIdentityContext"] = None,
+        _turn_memory_state=None,
     ):
         # 保存当前任务的sentence_id到局部变量，避免被新任务覆盖
         current_sentence_id = None
         active_dialogue = self.get_dialogue_for_turn(
             turn_identity_context
         )
+        if (
+            depth == 0
+            and self.memory is not None
+            and self.is_family_memory_active()
+        ):
+            _turn_memory_state = {
+                "user_content": query,
+                "assistant_parts": [],
+                "incomplete": False,
+                "save_attempted": False,
+            }
 
         if query is not None:
             self.logger.bind(tag=TAG).info(f"大模型收到用户消息: {query}")
@@ -1212,6 +1233,8 @@ class ConnectionHandler:
                     ),
                 )
         except Exception as e:
+            if _turn_memory_state is not None:
+                self._mark_family_turn_incomplete(_turn_memory_state)
             self.logger.bind(tag=TAG).error(f"LLM 处理出错 {query}: {e}")
             return None
 
@@ -1224,6 +1247,10 @@ class ConnectionHandler:
         try:
             for response in llm_responses:
                 if self.client_abort:
+                    if _turn_memory_state is not None:
+                        self._mark_family_turn_incomplete(
+                            _turn_memory_state
+                        )
                     break
                 if self.intent_type == "function_call" and functions is not None:
                     content, tools_call = response
@@ -1279,6 +1306,11 @@ class ConnectionHandler:
                 if content is not None and len(content) > 0:
                     if not tool_call_flag:
                         response_message.append(content)
+                        if _turn_memory_state is not None:
+                            self._append_family_turn_assistant_text(
+                                _turn_memory_state,
+                                content,
+                            )
                         self.tts.tts_text_queue.put(
                             TTSMessageDTO(
                                 sentence_id=current_sentence_id,
@@ -1288,6 +1320,8 @@ class ConnectionHandler:
                             )
                         )
         except Exception as e:
+            if _turn_memory_state is not None:
+                self._mark_family_turn_incomplete(_turn_memory_state)
             self.logger.bind(tag=TAG).error(f"LLM stream processing error: {e}")
             self.tts.tts_text_queue.put(
                 TTSMessageDTO(
@@ -1306,6 +1340,9 @@ class ConnectionHandler:
                     )
                 )
             return
+        if self.client_abort:
+            if _turn_memory_state is not None:
+                self._mark_family_turn_incomplete(_turn_memory_state)
         # 处理function call
         if tool_call_flag:
             bHasError = False
@@ -1366,6 +1403,11 @@ class ConnectionHandler:
                             da_response = self._clean_response_garbage(da_response)
                             self.tts.store_tts_text(current_sentence_id, da_response)
                             active_dialogue.put(Message(role="assistant", content=da_response))
+                            if _turn_memory_state is not None:
+                                self._append_family_turn_assistant_text(
+                                    _turn_memory_state,
+                                    da_response,
+                                )
 
                     if not real_tool_calls:
                         if depth == 0:
@@ -1376,6 +1418,11 @@ class ConnectionHandler:
                                     content_type=ContentType.ACTION,
                                 )
                             )
+                            if _turn_memory_state is not None:
+                                self._save_family_turn_memory(
+                                    _turn_memory_state,
+                                    turn_identity_context,
+                                )
                         return
 
                     tool_calls_list = real_tool_calls
@@ -1444,6 +1491,7 @@ class ConnectionHandler:
                         streamed_text=streamed_text,
                         turn_identity_context=turn_identity_context,
                         dialogue=active_dialogue,
+                        turn_memory_state=_turn_memory_state,
                     )
 
         # 存储对话内容
@@ -1466,6 +1514,11 @@ class ConnectionHandler:
                     active_dialogue.get_llm_dialogue(), indent=4, ensure_ascii=False
                 )
             )
+            if _turn_memory_state is not None:
+                self._save_family_turn_memory(
+                    _turn_memory_state,
+                    turn_identity_context,
+                )
 
         return True
 
@@ -1477,6 +1530,7 @@ class ConnectionHandler:
         *,
         turn_identity_context: Optional["TurnIdentityContext"] = None,
         dialogue=None,
+        turn_memory_state=None,
     ):
         active_dialogue = (
             self.get_dialogue_for_turn(turn_identity_context)
@@ -1500,6 +1554,11 @@ class ConnectionHandler:
                 else:
                     self.tts.tts_one_sentence(self, ContentType.TEXT, content_detail=text)
                     self.tts.store_tts_text(self.sentence_id, text)
+                    if turn_memory_state is not None:
+                        self._append_family_turn_assistant_text(
+                            turn_memory_state,
+                            text,
+                        )
                 active_dialogue.put(Message(role="assistant", content=text))
             elif result.action == Action.REQLLM:
                 need_llm_tools.append((result, tool_call_data))
@@ -1592,6 +1651,69 @@ class ConnectionHandler:
                 None,
                 depth=depth + 1,
                 turn_identity_context=turn_identity_context,
+                _turn_memory_state=turn_memory_state,
+            )
+
+    @staticmethod
+    def _append_family_turn_assistant_text(turn_memory_state, text):
+        if turn_memory_state is None or not isinstance(text, str) or not text:
+            return
+        turn_memory_state["assistant_parts"].append(text)
+
+    @staticmethod
+    def _mark_family_turn_incomplete(turn_memory_state):
+        if turn_memory_state is not None:
+            turn_memory_state["incomplete"] = True
+
+    def _save_family_turn_memory(
+        self,
+        turn_memory_state,
+        turn_identity_context,
+    ):
+        if (
+            turn_memory_state is None
+            or turn_memory_state["save_attempted"]
+            or turn_memory_state["incomplete"]
+            or self.memory is None
+            or not self.is_family_memory_active()
+        ):
+            return
+
+        user_content = turn_memory_state["user_content"]
+        assistant_content = "".join(
+            turn_memory_state["assistant_parts"]
+        )
+        if (
+            not isinstance(user_content, str)
+            or not user_content.strip()
+            or not assistant_content.strip()
+        ):
+            return
+
+        memory_user_id = self.get_memory_user_id_for_turn(
+            turn_identity_context,
+            for_write=True,
+        )
+        if memory_user_id is None:
+            return
+
+        turn_memory_state["save_attempted"] = True
+        messages = [
+            Message(role="user", content=user_content),
+            Message(role="assistant", content=assistant_content),
+        ]
+        try:
+            future = asyncio.run_coroutine_threadsafe(
+                self.memory.save_memory(
+                    messages,
+                    user_id=memory_user_id,
+                ),
+                self.loop,
+            )
+            future.result()
+        except Exception as e:
+            self.logger.bind(tag=TAG).error(
+                f"保存本轮个人记忆失败: {e}"
             )
 
     def _report_worker(self):

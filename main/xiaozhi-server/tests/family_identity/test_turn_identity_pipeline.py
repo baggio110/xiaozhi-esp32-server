@@ -84,6 +84,7 @@ class FakeToolRecursionConnection:
     def __init__(self):
         self.dialogue = RecordingDialogue()
         self.chat_calls = []
+        self.turn_memory_states = []
         self.current_speaker = None
         self.family_memory_runtime = ForbiddenCallTracker(
             "family_memory_runtime"
@@ -99,10 +100,12 @@ class FakeToolRecursionConnection:
         depth=0,
         *,
         turn_identity_context=None,
+        _turn_memory_state=None,
     ):
         self.chat_calls.append(
             (query, depth, turn_identity_context)
         )
+        self.turn_memory_states.append(_turn_memory_state)
 
 
 def load_handle_function_result():
