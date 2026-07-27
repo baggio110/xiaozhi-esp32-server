@@ -165,6 +165,16 @@ ASR 完成一轮识别后，将本轮 `RecognitionResult` 交给 Runtime 解析�
 
 本阶段 `chat()` 只接收并原样传递该参数，不使用它查询、修改或保存记忆；Dialogue、PowerMem、提示词和工具行为均保持不变。
 
+## B4a1 连接级短期 Dialogue 存储
+
+短期 Dialogue 在每个连接内部按已验证的 `memory_user_id` 隔离；同一人员在同一连接内复用同一个 Dialogue，不同人员使用不同 Dialogue。同一人员在不同连接中的短期 Dialogue 互不共享，跨终端共享只属于后续 PowerMem 长期记忆。
+
+身份识别失败、`TurnIdentityContext` 为空以及没有声纹结果的入口统一使用该连接唯一的匿名 Dialogue。匿名 Dialogue 允许在同一连接内连续追问，但不读取或写入任何个人 PowerMem，不回退到设备或上一位人员，也不与个人 Dialogue 共享消息。
+
+匿名 Dialogue 随连接级存储清理而释放，不持久化；匿名历史不得自动合并进个人历史，个人历史也不得复制到匿名 Dialogue。
+
+本阶段仅实现独立的 `FamilySessionDialogueStore` 及其生命周期契约，尚未接入 `ConnectionHandler`。Dialogue 工厂如何复制 system prompt 和 few-shot 内容留待 B4a2。
+
 ## 第一版不包含
 
 - 智控台家庭成员页面

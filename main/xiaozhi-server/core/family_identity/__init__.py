@@ -32,6 +32,7 @@ from .policy import IdentityPolicy, MemoryAccessPolicy
 from .service import IdentityService
 from .sqlite_repository import SCHEMA_VERSION, SQLiteIdentityRepository
 from .runtime import FamilyMemoryRuntime
+from .session_dialogues import FamilySessionDialogueStore
 
 __all__ = [
     "DEFAULT_DATABASE_PATH",
@@ -39,6 +40,7 @@ __all__ = [
     "FamilyMemoryConfigurationError",
     "FamilyMemoryRuntime",
     "FamilyMemorySettings",
+    "FamilySessionDialogueStore",
     "IdentityDecision",
     "IdentityPolicy",
     "IdentityRepositoryError",
