@@ -26,6 +26,7 @@ from .models import (
     PersonIdentity,
     RecognitionResult,
     TurnIdentityContext,
+    VoiceprintBinding,
     build_memory_user_id,
 )
 from .policy import IdentityPolicy, MemoryAccessPolicy
@@ -59,6 +60,7 @@ __all__ = [
     "TurnIdentityContext",
     "UnsupportedSchemaVersionError",
     "VoiceprintAlreadyBoundError",
+    "VoiceprintBinding",
     "VoiceprintBindingError",
     "VoiceprintNotFoundError",
     "VoiceprintRevokedError",

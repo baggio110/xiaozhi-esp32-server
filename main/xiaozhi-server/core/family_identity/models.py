@@ -71,6 +71,25 @@ class PersonIdentity:
 
 
 @dataclass(frozen=True)
+class VoiceprintBinding:
+    """官方声纹 ID 与稳定家庭成员之间的本地映射。"""
+
+    voiceprint_id: str
+    family_id: str
+    person_id: str
+    revoked_at: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        _require_non_empty_id(self.voiceprint_id, "voiceprint_id")
+        _require_non_empty_id(self.family_id, "family_id")
+        _require_non_empty_id(self.person_id, "person_id")
+
+    @property
+    def active(self) -> bool:
+        return self.revoked_at is None
+
+
+@dataclass(frozen=True)
 class IdentityDecision:
     """身份路由结果及私人记忆访问权限。"""
 

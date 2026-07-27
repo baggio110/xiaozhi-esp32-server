@@ -240,6 +240,28 @@ PowerMem Provider 的 `save_memory()` 增加向后兼容的可选 `user_id` 参�
 验收阶段确认和压测；本阶段只保证每次调用显式携带独立 `user_id`，不引入共享可变
 人员状态。
 
+## B6 人员映射管理与部署预检
+
+官方声纹系统继续独立负责声纹注册和识别，并产生 `voiceprint_id`。项目内管理工具
+只负责把已有 `voiceprint_id` 绑定到稳定的 `family_id + person_id`；不录音、不提取
+声纹特征、不调用官方声纹服务，也不修改官方声纹数据库。
+
+`display_name` 只用于显示。PowerMem 身份始终调用 `build_memory_user_id()` 生成
+`family_id:person_id`，不接受清单填写的记忆 ID，也不根据亲属称谓或显示名称推断人员。
+
+JSON 清单必须先执行只读 `plan`。`plan` 对已有 SQLite 使用只读连接，对不存在的数据
+库只报告待新增项目，不创建数据库、WAL 或 SHM。`apply` 必须显式提供与清单精确一致
+的 `--confirm-family-id`，并在写入前重新计划；人员更新和新增声纹绑定由 Repository
+在同一个事务内完成，重复应用同一清单保持幂等。
+
+清单中没有出现的人员不会被删除，某成员 `voiceprint_ids` 中没有出现的既有绑定也不会
+被撤销。停用人员、撤销声纹和替换声纹必须使用明确命令；撤销历史保留，不能通过工具
+绕过全局 `voiceprint_id` 唯一约束。
+
+`preflight` 只检查 Python、PowerMem 包和接口签名、家庭配置、持久化路径及身份库
+schema。它不会实例化 PowerMem 客户端，不调用 `search/profile/add`，也不读取或写入
+私人记忆和用户画像。
+
 ## 第一版不包含
 
 - 智控台家庭成员页面
