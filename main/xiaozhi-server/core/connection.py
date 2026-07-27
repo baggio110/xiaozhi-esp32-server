@@ -45,10 +45,15 @@ from core.utils.prompt_manager import PromptManager
 from core.utils.voiceprint_provider import VoiceprintProvider
 from core.utils.util import get_system_error_response
 from core.utils import textUtils
+from core.family_identity.models import (
+    TurnIdentityContext,
+    build_memory_user_id,
+)
+from core.family_identity.policy import MemoryAccessPolicy
 from core.family_identity.session_dialogues import FamilySessionDialogueStore
 
 if TYPE_CHECKING:
-    from core.family_identity import FamilyMemoryRuntime, TurnIdentityContext
+    from core.family_identity import FamilyMemoryRuntime
 
 
 TAG = __name__
@@ -1060,6 +1065,30 @@ class ConnectionHandler:
             turn_identity_context
         )
 
+    def is_family_memory_active(self):
+        return self.family_session_dialogues is not None
+
+    @staticmethod
+    def get_memory_user_id_for_turn(turn_identity_context=None):
+        """从不可变轮次身份中取得经过授权的 PowerMem user_id。"""
+
+        if not isinstance(turn_identity_context, TurnIdentityContext):
+            return None
+        decision = turn_identity_context.identity_decision
+        try:
+            memory_user_id = MemoryAccessPolicy.user_id_for_read(
+                decision
+            )
+            expected_user_id = build_memory_user_id(
+                decision.family_id,
+                decision.person_id,
+            )
+        except (AttributeError, PermissionError, TypeError, ValueError):
+            return None
+        if memory_user_id != expected_user_id:
+            return None
+        return memory_user_id
+
     def chat(
         self,
         query,
@@ -1130,10 +1159,33 @@ class ConnectionHandler:
             memory_str = None
             # 仅当query非空（代表用户询问）时查询记忆
             if self.memory is not None and query:
-                future = asyncio.run_coroutine_threadsafe(
-                    self.memory.query_memory(query), self.loop
-                )
-                memory_str = future.result()
+                try:
+                    if self.is_family_memory_active():
+                        memory_user_id = (
+                            self.get_memory_user_id_for_turn(
+                                turn_identity_context
+                            )
+                        )
+                        memory_query = (
+                            self.memory.query_memory(
+                                query,
+                                user_id=memory_user_id,
+                            )
+                            if memory_user_id is not None
+                            else None
+                        )
+                    else:
+                        memory_query = self.memory.query_memory(query)
+                    if memory_query is not None:
+                        future = asyncio.run_coroutine_threadsafe(
+                            memory_query,
+                            self.loop,
+                        )
+                        memory_str = future.result()
+                except Exception as e:
+                    self.logger.bind(tag=TAG).error(
+                        f"查询记忆失败: {e}"
+                    )
 
             # 仅在该说话人首次出现时把身份注入 system，之后靠对话历史首轮保留，
             # 避免每轮在 system 重复出现名字诱导模型反复称呼

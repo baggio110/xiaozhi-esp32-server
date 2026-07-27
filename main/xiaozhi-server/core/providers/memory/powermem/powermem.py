@@ -12,6 +12,7 @@
 
 import asyncio
 import json
+import threading
 import traceback
 from typing import Optional, Dict, Any
 
@@ -43,6 +44,8 @@ class MemoryProvider(MemoryProviderBase):
         self.memory_client = None
         self.enable_user_profile = False
         self.last_profile_content = ""  # Cache for user profile from UserMemory
+        self._profile_cache: Dict[str, str] = {}
+        self._profile_cache_lock = threading.Lock()
         try:
             self.enable_user_profile = str(config.get("enable_user_profile", False)).lower() == 'true'
             # Get configuration parameters
@@ -215,7 +218,11 @@ class MemoryProvider(MemoryProviderBase):
 
         return None
 
-    async def query_memory(self, query: str) -> str:
+    async def query_memory(
+        self,
+        query: str,
+        user_id: Optional[str] = None,
+    ) -> str:
         """
         Query memories from PowerMem based on similarity search.
 
@@ -230,7 +237,10 @@ class MemoryProvider(MemoryProviderBase):
             return ""
 
         try:
-            if not getattr(self, "role_id", None):
+            effective_user_id = (
+                self.role_id if user_id is None else user_id
+            )
+            if not effective_user_id:
                 logger.bind(tag=TAG).debug("No role_id set, returning empty memory")
                 return ""
 
@@ -249,7 +259,7 @@ class MemoryProvider(MemoryProviderBase):
 
             # If user profile mode is enabled, include user profile in results
             if self.enable_user_profile:
-                profile = await self.get_user_profile()
+                profile = await self.get_user_profile(user_id=user_id)
                 if profile:
                     result_parts.append(f"【用户画像】\n{profile}")
 
@@ -259,14 +269,14 @@ class MemoryProvider(MemoryProviderBase):
                 results = await asyncio.to_thread(
                     self.memory_client.search,
                     query=search_query,
-                    user_id=self.role_id,
+                    user_id=effective_user_id,
                     limit=30
                 )
             else:
                 # AsyncMemory uses async search
                 results = await self.memory_client.search(
                     query=search_query,
-                    user_id=self.role_id,
+                    user_id=effective_user_id,
                     limit=30
                 )
 
@@ -319,7 +329,10 @@ class MemoryProvider(MemoryProviderBase):
             logger.bind(tag=TAG).debug(f"Detailed error: {traceback.format_exc()}")
             return ""
 
-    async def get_user_profile(self) -> str:
+    async def get_user_profile(
+        self,
+        user_id: Optional[str] = None,
+    ) -> str:
         """
         Get user profile from PowerMem (only available in UserMemory mode).
 
@@ -339,10 +352,21 @@ class MemoryProvider(MemoryProviderBase):
             logger.bind(tag=TAG).debug("User profile mode is not enabled")
             return ""
 
-        # Return cached profile content if available (fast path)
-        if self.last_profile_content:
-            logger.bind(tag=TAG).debug("Returning cached user profile")
-            return self.last_profile_content
+        effective_user_id = self.role_id if user_id is None else user_id
+        if not effective_user_id:
+            return ""
+
+        # family_memory 关闭时继续使用官方单值缓存语义。
+        if user_id is None:
+            if self.last_profile_content:
+                logger.bind(tag=TAG).debug("Returning cached user profile")
+                return self.last_profile_content
+        else:
+            with self._profile_cache_lock:
+                cached_profile = self._profile_cache.get(effective_user_id)
+            if cached_profile:
+                logger.bind(tag=TAG).debug("Returning cached user profile")
+                return cached_profile
 
         # Cache is empty, fetch from PowerMem SDK
         logger.bind(tag=TAG).info("Cache miss, fetching user profile from PowerMem SDK")
@@ -350,7 +374,7 @@ class MemoryProvider(MemoryProviderBase):
             # Call UserMemory.profile() to get profile data
             profile_data = await asyncio.to_thread(
                 self.memory_client.profile,
-                self.role_id
+                user_id=effective_user_id,
             )
 
             if not profile_data:
@@ -360,19 +384,26 @@ class MemoryProvider(MemoryProviderBase):
             # Try to use profile_content first
             profile_content = profile_data.get("profile_content")
             if profile_content:
-                # Update cache with fetched profile_content
-                self.last_profile_content = profile_content
-                logger.bind(tag=TAG).info(f"Successfully fetched and cached user profile from profile_content (length: {len(self.last_profile_content)})")
-                return self.last_profile_content
+                return self._cache_profile(
+                    effective_user_id,
+                    profile_content,
+                    legacy_cache=user_id is None,
+                )
 
             # If profile_content is empty, fallback to topics
             topics = profile_data.get("topics")
             if topics:
-                import json
                 # Serialize topics dict to JSON string for structured profile
-                self.last_profile_content = json.dumps(topics, ensure_ascii=False, indent=2)
-                logger.bind(tag=TAG).info(f"Successfully fetched and cached user profile from topics (length: {len(self.last_profile_content)})")
-                return self.last_profile_content
+                profile_content = json.dumps(
+                    topics,
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                return self._cache_profile(
+                    effective_user_id,
+                    profile_content,
+                    legacy_cache=user_id is None,
+                )
 
             # Both profile_content and topics are empty
             logger.bind(tag=TAG).warning("PowerMem SDK returned profile with empty profile_content and topics")
@@ -382,4 +413,22 @@ class MemoryProvider(MemoryProviderBase):
             logger.bind(tag=TAG).error(f"Failed to fetch user profile from SDK: {str(e)}")
             logger.bind(tag=TAG).debug(f"Detailed error: {traceback.format_exc()}")
             return ""
+
+    def _cache_profile(
+        self,
+        user_id: str,
+        profile_content: str,
+        *,
+        legacy_cache: bool,
+    ) -> str:
+        if legacy_cache:
+            self.last_profile_content = profile_content
+        else:
+            with self._profile_cache_lock:
+                self._profile_cache[user_id] = profile_content
+        logger.bind(tag=TAG).info(
+            "Successfully fetched and cached user profile "
+            f"(length: {len(profile_content)})"
+        )
+        return profile_content
 

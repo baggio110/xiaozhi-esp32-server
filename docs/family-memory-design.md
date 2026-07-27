@@ -191,6 +191,28 @@ Store 工厂通过 `Dialogue.copy_static_context()` 深复制官方 Dialogue 中
 
 本阶段仅隔离短期上下文。PowerMem 查询、画像、断开整段保存及其官方 `device_id` 行为均未修改，因此尚不能作为完整个人长期记忆功能部署。
 
+## B4b PowerMem 个人读取路由
+
+家庭功能关闭时，`ConnectionHandler` 继续按官方旧签名调用
+`query_memory(query)`，由 Provider 使用当前 `role_id/device_id`，用户画像也继续使用
+官方单值缓存路径。
+
+家庭功能开启时，只有不可变 `TurnIdentityContext` 中通过
+`MemoryAccessPolicy.user_id_for_read()` 授权、且精确匹配
+`family_id:person_id` 的 `memory_user_id` 才能进入 PowerMem。
+`query_memory(query, user_id=memory_user_id)`、`get_user_profile(user_id=memory_user_id)`
+和底层 PowerMem SDK 的 `search/profile` 均使用本次调用的局部参数，不修改共享
+Provider 的 `role_id`。
+
+显式用户画像缓存仅存在于进程内，并按已验证的 `memory_user_id` 分键；
+标准库锁只保护缓存字典的读写。匿名、身份失败、空上下文和非法已识别结果不调用
+任何私人记忆或画像读取，也不创建或读取画像缓存项，不回退到设备或上一位人员。
+查询异常时，本轮以无长期记忆继续生成回答。
+
+记忆和画像只作为 `get_llm_dialogue_with_memory()` 的本轮局部输入构建 LLM
+消息副本，不写入个人 Dialogue、匿名 Dialogue 或静态模板。本阶段不修改
+`save_memory()`、逐轮保存或断开连接整段保存。
+
 ## 第一版不包含
 
 - 智控台家庭成员页面
