@@ -120,6 +120,12 @@ public class ConfigServiceImpl implements ConfigService {
         String redisKey = RedisKeys.getTmpRegisterMacKey(macAddress);
         Object isAdminRequest = redisUtils.get(redisKey);
 
+        if ("family_memory_admin".equals(isAdminRequest)) {
+            redisUtils.delete(redisKey);
+            Map<String, Object> adminConfig = new HashMap<>(getConfig(true));
+            adminConfig.put("family_memory_admin_authorized", true);
+            return adminConfig;
+        }
         if (isAdminRequest != null && "true".equals(isAdminRequest)) {
             // 管理控制台请求，返回getConfig的结果
             redisUtils.delete(redisKey); // 使用后清理

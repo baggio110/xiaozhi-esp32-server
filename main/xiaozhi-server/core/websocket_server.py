@@ -1,9 +1,11 @@
 import asyncio
 import logging
+from pathlib import Path
 from typing import Optional, TYPE_CHECKING
 
 import websockets
 from config.logger import setup_logging
+from core.api.family_memory_handler import FamilyMemoryAdminHandler
 
 if TYPE_CHECKING:
     from core.family_identity import FamilyMemoryRuntime
@@ -52,6 +54,10 @@ class WebSocketServer:
     ):
         self.config = config
         self.family_memory_runtime = family_memory_runtime
+        self.family_memory_admin = FamilyMemoryAdminHandler(
+            Path(__file__).resolve().parents[1],
+            family_memory_runtime,
+        )
         self.logger = setup_logging(config)
         self.config_lock = asyncio.Lock()
         modules = initialize_modules(

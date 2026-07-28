@@ -112,6 +112,7 @@ class ConnectionHandler:
         self.bind_prompt_interval = 60  # 绑定提示播放间隔(秒)
 
         self.read_config_from_api = self.config.get("read_config_from_api", False)
+        self.family_memory_admin_authorized = False
 
         self.websocket: websockets.ServerConnection | None = None
         self.headers = None
@@ -826,6 +827,9 @@ class ConnectionHandler:
                 self.config,
                 self.headers.get("device-id"),
                 self.headers.get("client-id", self.headers.get("device-id")),
+            )
+            self.family_memory_admin_authorized = bool(
+                private_config.pop("family_memory_admin_authorized", False)
             )
             private_config["delete_audio"] = bool(self.config.get("delete_audio", True))
             self.logger.bind(tag=TAG).info(

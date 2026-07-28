@@ -184,6 +184,17 @@ const routes = [
       title: '功能配置'
     }
   },
+  {
+    path: '/family-memory',
+    name: 'FamilyMemory',
+    component: function () {
+      return import('../views/FamilyMemory.vue')
+    },
+    meta: {
+      requiresAuth: true,
+      title: '家庭记忆'
+    }
+  },
   // 替换词管理
   {
     path: '/replacement-word-management',
@@ -229,7 +240,7 @@ VueRouter.prototype.push = function push(location) {
 }
 
 // 需要登录才能访问的路由
-const protectedRoutes = ['home', 'RoleConfig', 'DeviceManagement', 'UserManagement', 'ModelConfig', 'KnowledgeBaseManagement', 'KnowledgeFileUpload', 'AddressBookManagement']
+const protectedRoutes = ['home', 'RoleConfig', 'DeviceManagement', 'UserManagement', 'ModelConfig', 'KnowledgeBaseManagement', 'KnowledgeFileUpload', 'AddressBookManagement', 'FamilyMemory']
 
 // 路由守卫
 router.beforeEach((to, from, next) => {

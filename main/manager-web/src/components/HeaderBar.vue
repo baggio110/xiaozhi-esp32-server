@@ -102,6 +102,7 @@
             $route.path === '/ota-management' ||
             $route.path === '/user-management' ||
             $route.path === '/feature-management' ||
+            $route.path === '/family-memory' ||
             $route.path === '/replacement-word-management'
         }" @visible-change="handleParamDropdownVisibleChange">
           <span class="el-dropdown-link">
@@ -115,6 +116,7 @@
                   $route.path === '/ota-management' ||
                   $route.path === '/user-management' ||
                   $route.path === '/feature-management' ||
+                  $route.path === '/family-memory' ||
                   $route.path === '/replacement-word-management'
                   ? 'brightness(0) invert(1)'
                   : 'None',
@@ -149,6 +151,9 @@
             </el-dropdown-item>
             <el-dropdown-item @click.native="handleRouter('featureManagement')">
               {{ $t("header.featureManagement") }}
+            </el-dropdown-item>
+            <el-dropdown-item @click.native="handleRouter('familyMemory')">
+              家庭记忆
             </el-dropdown-item>
           </el-dropdown-menu>
         </el-dropdown>
@@ -220,6 +225,7 @@ export default {
         replacementWordManagement: "/replacement-word-management",
         serverSideManagement: "/server-side-management",
         featureManagement: "/feature-management",
+        familyMemory: "/family-memory",
       }
     };
   },

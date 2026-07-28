@@ -8,7 +8,8 @@ import com.fasterxml.jackson.annotation.JsonValue;
  */
 public enum ServerActionEnum {
     RESTART("restart"),
-    UPDATE_CONFIG("update_config");
+    UPDATE_CONFIG("update_config"),
+    FAMILY_MEMORY("family_memory");
 
     private final String value;
 
