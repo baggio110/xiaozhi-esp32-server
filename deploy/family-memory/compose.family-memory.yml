@@ -1,0 +1,5 @@
+services:
+  xiaozhi-esp32-server:
+    image: ${FAMILY_MEMORY_SERVER_IMAGE:?必须设置固定版本的FAMILY_MEMORY_SERVER_IMAGE}
+  xiaozhi-esp32-server-web:
+    image: ${FAMILY_MEMORY_WEB_IMAGE:?必须设置固定版本的FAMILY_MEMORY_WEB_IMAGE}

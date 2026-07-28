@@ -1,0 +1,154 @@
+name: Family Memory Images Release
+
+on:
+  push:
+    tags:
+      - 'v0.9.6-family-memory.*'
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE_VERSION: ${{ github.ref_name }}
+  SERVER_IMAGE: ghcr.io/baggio110/xiaozhi-family-memory-server:${{ github.ref_name }}
+  WEB_IMAGE: ghcr.io/baggio110/xiaozhi-family-memory-web:${{ github.ref_name }}
+
+jobs:
+  release:
+    name: Verify then publish fixed family memory images
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout exact tagged commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate fixed release tag and commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF_NAME" =~ ^v0\.9\.6-family-memory\.[0-9]+$ ]]
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git tag --points-at HEAD | grep -Fx "$GITHUB_REF_NAME"
+          mkdir -p artifacts
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Run Python tests without starting services
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm --platform linux/amd64 \
+            -e PYTHONDONTWRITEBYTECODE=1 \
+            -v "$GITHUB_WORKSPACE/main/xiaozhi-server:/workspace" \
+            -w /workspace \
+            ghcr.io/xinnan-tech/xiaozhi-esp32-server:server-base \
+            python -m unittest discover -s tests -p 'test_*.py' -v \
+            2>&1 | tee artifacts/python-tests.txt
+
+      - name: Compile manager-api and run B8 tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm --platform linux/amd64 \
+            -v "$GITHUB_WORKSPACE/main/manager-api:/workspace" \
+            -v "${{ runner.temp }}/family-memory-m2:/root/.m2" \
+            -w /workspace \
+            maven:3.9.4-eclipse-temurin-21 \
+            mvn -B -ntp -DskipTests=false \
+            -Dtest=FamilyMemorySecurityContractTest,FamilyMemoryServiceTest \
+            clean test
+          cp -R main/manager-api/target/surefire-reports artifacts/manager-api-surefire
+
+      - name: Test and build manager-web
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm --platform linux/amd64 \
+            -v "$GITHUB_WORKSPACE:/workspace" \
+            -w /workspace/main/manager-web \
+            node:18 sh -ec '
+              npm ci
+              npm run check:i18n
+              npm run test:unit
+              npm run test:snapshot
+              npm run build
+            ' 2>&1 | tee artifacts/manager-web.txt
+
+      - name: Clean host build products before image context
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo rm -rf main/manager-api/target main/manager-web/node_modules main/manager-web/dist
+          sudo find main/xiaozhi-server -type d -name __pycache__ -prune -exec rm -rf {} +
+          sudo find main/xiaozhi-server -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
+
+      - name: Build server image locally
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: deploy/family-memory/Dockerfile.server
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: ${{ env.SERVER_IMAGE }}
+          build-args: |
+            SOURCE=https://github.com/baggio110/xiaozhi-esp32-server
+            REVISION=${{ github.sha }}
+            VERSION=${{ env.IMAGE_VERSION }}
+
+      - name: Build web image locally
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: deploy/family-memory/Dockerfile.web
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: ${{ env.WEB_IMAGE }}
+          build-args: |
+            SOURCE=https://github.com/baggio110/xiaozhi-esp32-server
+            REVISION=${{ github.sha }}
+            VERSION=${{ env.IMAGE_VERSION }}
+
+      - name: Verify images read-only before login
+        shell: bash
+        env:
+          EXPECTED_REVISION: ${{ github.sha }}
+          EXPECTED_VERSION: ${{ env.IMAGE_VERSION }}
+        run: deploy/family-memory/verify-images.sh
+
+      - name: Verify Compose override before login
+        shell: bash
+        env:
+          FAMILY_MEMORY_SERVER_IMAGE: ${{ env.SERVER_IMAGE }}
+          FAMILY_MEMORY_WEB_IMAGE: ${{ env.WEB_IMAGE }}
+          COMPOSE_REPORT: ${{ github.workspace }}/artifacts/compose.json
+        run: deploy/family-memory/verify-compose.sh
+
+      - name: Login to GHCR after every verification passes
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push fixed tags to GHCR
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker push "$SERVER_IMAGE"
+          docker push "$WEB_IMAGE"
+
+      - name: Upload non-sensitive verification reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: family-memory-release-verification-${{ github.run_id }}
+          path: artifacts/
+          if-no-files-found: warn
+          retention-days: 7

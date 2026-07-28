@@ -1,0 +1,30 @@
+# syntax=docker/dockerfile:1.7
+
+ARG SERVER_BASE_IMAGE=ghcr.io/xinnan-tech/xiaozhi-esp32-server:server-base
+FROM ${SERVER_BASE_IMAGE}
+
+ARG SERVER_BASE_IMAGE
+ARG SOURCE
+ARG REVISION
+ARG VERSION
+
+LABEL org.opencontainers.image.source="${SOURCE}" \
+      org.opencontainers.image.revision="${REVISION}" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.base.name="${SERVER_BASE_IMAGE}" \
+      io.xiaozhi.family-memory.powermem.version="0.5.3"
+
+WORKDIR /opt/xiaozhi-esp32-server
+
+# 官方 requirements 使用范围版本；定制镜像必须把部署验证版本固定为 0.5.3。
+RUN python -m pip install --no-cache-dir --upgrade "powermem==0.5.3" \
+    && python -c "from importlib.metadata import version; assert version('powermem') == '0.5.3'"
+
+COPY main/xiaozhi-server/ ./
+
+# 运行镜像只保留业务代码；用户数据始终由官方 data 卷提供。
+RUN rm -rf data tests .test_tmp \
+    && find . -type d -name __pycache__ -prune -exec rm -rf {} + \
+    && find . -type f \( -name '*.pyc' -o -name '*.pyo' -o -name '*.db' -o -name '*.sqlite' -o -name '*.sqlite3' -o -name '*.wal' -o -name '*.shm' \) -delete
+
+CMD ["python", "app.py"]

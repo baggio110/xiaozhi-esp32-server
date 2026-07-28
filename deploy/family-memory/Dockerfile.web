@@ -1,0 +1,55 @@
+# syntax=docker/dockerfile:1.7
+
+ARG NODE_IMAGE=node:18
+ARG MAVEN_IMAGE=maven:3.9.4-eclipse-temurin-21
+ARG RUNTIME_IMAGE=bellsoft/liberica-runtime-container:jre-21-glibc
+
+FROM ${NODE_IMAGE} AS web-builder
+WORKDIR /app
+COPY main/manager-web/package.json main/manager-web/package-lock.json ./
+RUN npm ci
+COPY main/manager-web/ ./
+RUN npm run check:i18n \
+    && npm run test:unit \
+    && npm run test:snapshot \
+    && npm run build
+
+FROM ${MAVEN_IMAGE} AS api-builder
+WORKDIR /app
+COPY main/manager-api/pom.xml ./
+COPY main/manager-api/src ./src
+RUN mvn -B -ntp -Dmaven.test.skip=true clean package
+
+FROM ${RUNTIME_IMAGE}
+
+ARG NODE_IMAGE
+ARG MAVEN_IMAGE
+ARG RUNTIME_IMAGE
+ARG SOURCE
+ARG REVISION
+ARG VERSION
+
+LABEL org.opencontainers.image.source="${SOURCE}" \
+      org.opencontainers.image.revision="${REVISION}" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.base.name="${RUNTIME_IMAGE}" \
+      io.xiaozhi.family-memory.build.node="${NODE_IMAGE}" \
+      io.xiaozhi.family-memory.build.maven="${MAVEN_IMAGE}"
+
+RUN apk update \
+    && apk add --no-cache --no-scripts nginx bash fontconfig ttf-dejavu \
+    && rm -rf /var/cache/apk/* \
+    && mkdir -p /run/nginx /var/log/nginx /var/tmp/nginx /etc/nginx/conf.d
+
+COPY main/manager-web/public/generator/static/fonts/*.ttf /usr/share/fonts/
+RUN fc-cache -f
+
+COPY docs/docker/nginx.conf /etc/nginx/nginx.conf
+COPY docs/docker/start.sh /start.sh
+COPY --from=web-builder /app/dist /usr/share/nginx/html
+COPY --from=api-builder /app/target/xiaozhi-esp32-api.jar /app/xiaozhi-esp32-api.jar
+
+RUN chmod +x /start.sh
+
+EXPOSE 8002
+CMD ["/start.sh"]
